@@ -1,0 +1,132 @@
+USER TAG TAXONOMY – ADULT VIDEO CLASSIFICATION (WITH CONFIDENCE)
+===============================================================
+
+# PARSING RULES
+# -------------
+# - Comments start with # and are ignored.
+# - Section headers look like: [section_name]
+# - Section-level settings use: @key = value
+# - Tag-level overrides use: tag | min_conf=0.80
+# - Confidence is a float from 0.00 to 1.00
+# - The AI MUST ONLY output tags that exist in this file.
+# - If a tag's confidence is below its minimum, the app MUST omit it
+#   (or place it into "suggested_low_confidence" depending on policy).
+
+# GLOBAL SETTINGS
+# ---------------
+@default_min_conf = 0.70
+@low_confidence_policy = omit
+# low_confidence_policy options:
+# - omit  (do not include the tag)
+# - suggest (include under suggested_low_confidence, not main tags)
+# - ask   (include under needs_review)
+
+################################################
+# CORE STRUCTURE TAGS
+################################################
+
+[content_type]
+@min_conf = 0.80
+solo
+pair
+group
+
+[scene_structure]
+@min_conf = 0.75
+single-scene
+multi-scene
+
+################################################
+# INTERACTION / DYNAMICS (NON-GRAPHIC)
+################################################
+
+[interaction_style]
+@min_conf = 0.75
+affectionate
+intimate
+performance-focused
+voyeur-style | min_conf=0.80
+roleplay
+power-dynamic | min_conf=0.80
+
+[pacing]
+@min_conf = 0.70
+slow
+moderate
+fast
+variable
+
+################################################
+# VISUAL & PRODUCTION CHARACTERISTICS
+################################################
+
+[lighting]
+@min_conf = 0.65
+bright
+natural
+low-light
+studio
+
+[camera_style]
+@min_conf = 0.70
+static
+handheld
+point-of-view | min_conf=0.80
+cinematic
+multi-angle
+
+[video_style]
+@min_conf = 0.70
+professional
+amateur
+home-recorded
+studio-produced
+
+################################################
+# SETTING / ENVIRONMENT
+################################################
+
+[environment]
+@min_conf = 0.65
+indoor
+outdoor | min_conf=0.75
+residential
+studio
+unknown | min_conf=0.60
+
+################################################
+# AUDIO CHARACTERISTICS
+################################################
+
+[audio]
+@min_conf = 0.75
+dialogue-present | min_conf=0.80
+music-present
+non-verbal
+background-noise
+
+################################################
+# FOCUS / THEMES (HIGH-LEVEL ONLY)
+################################################
+
+[focus_themes]
+@min_conf = 0.85
+body-focus
+attire-focus
+scenario-focus
+dominance-theme | min_conf=0.90
+submission-theme | min_conf=0.90
+
+################################################
+# USER CUSTOM TAGS (FREE-FORM)
+################################################
+
+[user_custom]
+@min_conf = 0.70
+favorite
+archival
+high-quality
+short-duration
+long-duration
+re-watch
+background-play

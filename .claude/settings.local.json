@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(powershell -Command \"npm run build 2>&1 | Select-Object -Last 50\")",
+      "Bash(powershell -Command \"cd ''C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp'' ; npm run build 2>&1 | Select-Object -Last 50\")",
+      "Bash(powershell -Command \"cd ''C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp'' ; npx tsc --noEmit 2>&1\")",
+      "Bash(where:*)",
+      "Bash(cmd /c \"where node 2>nul || echo Node not found\")",
+      "Bash(cmd /c \"node --version 2>nul || echo Node not available\")",
+      "Bash(cmd /c \"dir /b /s C:\\Program*\\nodejs\\node.exe 2>nul | head -1\")",
+      "Bash(cmd /c \"if exist %APPDATA%\\npm\\npm.cmd echo Found npm in APPDATA\")",
+      "Bash(cmd /c \"echo %PATH%\")",
+      "Bash(powershell:*)",
+      "Bash(powershell.exe -NoProfile -Command \"Write-Host $env:PATH\")",
+      "Bash(\"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\\node_modules\\.bin\\tsc.cmd\" --noEmit --project \"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\")"
+    ]
+  }
+}
