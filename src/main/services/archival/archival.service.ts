@@ -598,6 +598,24 @@ export class ArchivalService {
         }
       }
 
+      // Extract thumbnail if enabled
+      if (this.activeJob.config.extractThumbnail) {
+        try {
+          const thumbnailPath = await this.extractThumbnail(
+            item.outputPath,
+            sourceInfo,
+            this.activeJob.config.thumbnailTimestamp
+          )
+          item.thumbnailPath = thumbnailPath
+        } catch (thumbnailError) {
+          // Log but don't fail the item if thumbnail extraction fails
+          this.logger.warn('Thumbnail extraction failed, continuing without thumbnail', {
+            input: item.inputPath,
+            error: thumbnailError instanceof Error ? thumbnailError.message : 'Unknown error'
+          })
+        }
+      }
+
       item.status = 'completed'
       item.completedAt = new Date().toISOString()
       item.progress = 100
@@ -615,7 +633,8 @@ export class ArchivalService {
         progress: 100,
         status: 'completed',
         outputSize: item.outputSize,
-        compressionRatio: item.compressionRatio
+        compressionRatio: item.compressionRatio,
+        thumbnailPath: item.thumbnailPath
       })
 
       this.logger.info(`Completed archival encoding${warningMsg}`, {
@@ -1153,6 +1172,100 @@ export class ArchivalService {
       item.outputPath = outputPath
       usedPaths.add(outputPath)
     }
+  }
+
+  /**
+   * Extract a thumbnail from the encoded video
+   */
+  private async extractThumbnail(
+    videoPath: string,
+    sourceInfo: VideoSourceInfo,
+    thumbnailTimestamp?: number
+  ): Promise<string> {
+    // Check if cancelled before starting
+    if (this.abortController?.signal.aborted) {
+      throw new Error('Thumbnail extraction cancelled')
+    }
+
+    const ffmpegPath = resolveBundledBinary('ffmpeg')
+
+    // Determine thumbnail timestamp
+    // For custom timestamp, clamp to video duration
+    // For auto, use 10% into video but handle very short videos
+    const duration = sourceInfo.duration ?? 10
+    let timestampSec: number
+    if (thumbnailTimestamp !== undefined) {
+      // Clamp custom timestamp to video duration (with small buffer)
+      timestampSec = Math.min(thumbnailTimestamp, Math.max(0, duration - 0.1))
+    } else {
+      // Auto: 10% into video, but at least 0.5s and at most duration - 0.1s
+      timestampSec = Math.min(Math.max(0.5, duration * 0.1), Math.max(0, duration - 0.1))
+    }
+
+    // Build thumbnail path next to video file
+    const videoDir = dirname(videoPath)
+    const videoName = basename(videoPath, extname(videoPath))
+    const thumbnailPath = join(videoDir, `${videoName}.jpg`)
+
+    return new Promise((resolve, reject) => {
+      const args = [
+        '-ss', String(timestampSec),
+        '-i', videoPath,
+        '-vf', "scale='min(480,iw)':-2",
+        '-vframes', '1',
+        '-q:v', '5',
+        '-y',
+        thumbnailPath
+      ]
+
+      this.logger.debug('Extracting thumbnail', { videoPath, thumbnailPath, timestampSec })
+
+      const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+
+      let stderr = ''
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString()
+      })
+
+      // Handle cancellation during extraction
+      const abortHandler = (): void => {
+        proc.kill()
+        // Clean up partial thumbnail
+        void unlink(thumbnailPath).catch(() => {})
+      }
+      this.abortController?.signal.addEventListener('abort', abortHandler, { once: true })
+
+      proc.on('close', async (code) => {
+        // Remove abort listener
+        this.abortController?.signal.removeEventListener('abort', abortHandler)
+
+        if (this.abortController?.signal.aborted) {
+          // Clean up if cancelled
+          await unlink(thumbnailPath).catch(() => {})
+          reject(new Error('Thumbnail extraction cancelled'))
+          return
+        }
+
+        if (code === 0) {
+          this.logger.info('Thumbnail extracted', { thumbnailPath })
+          resolve(thumbnailPath)
+        } else {
+          // Clean up failed/partial thumbnail
+          await unlink(thumbnailPath).catch(() => {})
+          this.logger.warn('Thumbnail extraction failed', { code, stderr: stderr.slice(-500) })
+          reject(new Error(`Thumbnail extraction failed with code ${code}`))
+        }
+      })
+
+      proc.on('error', async (error) => {
+        // Remove abort listener
+        this.abortController?.signal.removeEventListener('abort', abortHandler)
+        // Clean up failed/partial thumbnail
+        await unlink(thumbnailPath).catch(() => {})
+        this.logger.warn('Thumbnail extraction error', { error: error.message })
+        reject(error)
+      })
+    })
   }
 
   /**

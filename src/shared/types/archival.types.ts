@@ -242,6 +242,10 @@ export interface ArchivalEncodingConfig {
   overwriteExisting: boolean
   deleteOriginal: boolean // Dangerous - disabled by default
   deleteOutputIfLarger: boolean // Delete output and keep original if output is larger
+
+  // Thumbnail extraction
+  extractThumbnail: boolean // Extract a thumbnail from the encoded video
+  thumbnailTimestamp?: number // Timestamp in seconds to extract thumbnail (default: 10% into video)
 }
 
 /**
@@ -284,7 +288,8 @@ export const DEFAULT_ARCHIVAL_CONFIG: Omit<ArchivalEncodingConfig, 'outputDir'> 
   preserveStructure: false,
   overwriteExisting: false,
   deleteOriginal: false, // Safety: never auto-delete originals
-  deleteOutputIfLarger: true // Smart: delete output if it's larger than original
+  deleteOutputIfLarger: true, // Smart: delete output if it's larger than original
+  extractThumbnail: false // Disabled by default
 }
 
 /**
@@ -353,6 +358,8 @@ export interface ArchivalBatchItem {
   encodingSpeed?: number // fps or x realtime
   etaSeconds?: number // estimated seconds remaining for this item
   elapsedSeconds?: number // elapsed encoding time
+  // Thumbnail
+  thumbnailPath?: string // Path to extracted thumbnail
 }
 
 /**
@@ -418,6 +425,8 @@ export interface ArchivalProgressEvent {
   batchProgress?: number // 0-100 overall batch progress
   processedItems?: number // number of items processed so far
   totalItems?: number // total items in batch
+  // Thumbnail
+  thumbnailPath?: string // Path to extracted thumbnail
 }
 
 /**

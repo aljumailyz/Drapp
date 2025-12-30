@@ -624,6 +624,8 @@ export type ArchivalBatchItem = {
   encodingSpeed?: number
   etaSeconds?: number
   elapsedSeconds?: number
+  // Thumbnail
+  thumbnailPath?: string
 }
 
 export type ArchivalBatchJob = {
@@ -669,6 +671,8 @@ export type ArchivalEncodingConfigFull = {
   overwriteExisting: boolean
   deleteOriginal: boolean
   deleteOutputIfLarger: boolean
+  extractThumbnail: boolean
+  thumbnailTimestamp?: number
 }
 
 export type ArchivalProgressEvent = {

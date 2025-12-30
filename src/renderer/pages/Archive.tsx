@@ -870,6 +870,18 @@ export default function Archive(): JSX.Element {
                   <p className="text-xs text-slate-400">Keep original if re-encoding produces a larger file</p>
                 </div>
               </label>
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.extractThumbnail ?? false}
+                  onChange={(e) => handleConfigChange('extractThumbnail', e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                <div className="text-sm text-slate-600">
+                  <span>Extract thumbnail</span>
+                  <p className="text-xs text-slate-400">Save a JPEG thumbnail alongside each encoded video</p>
+                </div>
+              </label>
               <label className="flex items-center gap-3 text-rose-600">
                 <input
                   type="checkbox"

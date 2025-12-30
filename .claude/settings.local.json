@@ -16,7 +16,8 @@
       "Bash(\"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\\node_modules\\.bin\\tsc.cmd\" --noEmit --project \"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\")",
       "Bash(cat:*)",
       "Bash(npx tsc:*)",
-      "Bash(Select-Object -Last 50)"
+      "Bash(Select-Object -Last 50)",
+      "Bash(findstr:*)"
     ]
   }
 }
