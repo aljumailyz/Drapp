@@ -17,6 +17,7 @@ export interface VideoSourceInfo {
   colorSpace?: string // bt709, bt2020, etc.
   hdrFormat?: string | null // HDR10, HLG, DolbyVision, etc.
   isHdr: boolean
+  bitrate?: number // Source bitrate in bits per second
 }
 
 /**
@@ -96,6 +97,82 @@ export const ARCHIVAL_CRF_MAX: ArchivalCrfMatrix = {
 }
 
 /**
+ * Bitrate thresholds for CRF adjustment (in bits per second)
+ *
+ * If source bitrate is below these thresholds, we raise CRF to avoid
+ * over-compressing already-compressed content. This prevents quality loss
+ * from re-encoding low-bitrate sources.
+ *
+ * - Below `low`: Source is very compressed, raise CRF by 3
+ * - Below `medium`: Source is moderately compressed, raise CRF by 1
+ * - Above `medium`: High bitrate source, use default CRF
+ */
+export const BITRATE_THRESHOLDS: Record<
+  Exclude<ArchivalResolution, 'source'>,
+  { low: number; medium: number }
+> = {
+  '4k': { low: 8_000_000, medium: 15_000_000 }, // 8 Mbps / 15 Mbps
+  '1440p': { low: 4_000_000, medium: 8_000_000 }, // 4 Mbps / 8 Mbps
+  '1080p': { low: 2_500_000, medium: 5_000_000 }, // 2.5 Mbps / 5 Mbps
+  '720p': { low: 1_500_000, medium: 3_000_000 }, // 1.5 Mbps / 3 Mbps
+  '480p': { low: 800_000, medium: 1_500_000 }, // 800 kbps / 1.5 Mbps
+  '360p': { low: 400_000, medium: 800_000 } // 400 kbps / 800 kbps
+}
+
+/**
+ * Adjust CRF based on source bitrate to avoid over-compression
+ *
+ * Low-bitrate sources are already compressed and re-encoding them with
+ * aggressive CRF can cause generation loss. This function raises CRF
+ * for such sources to preserve quality.
+ *
+ * @returns Object with adjusted CRF, the adjustment amount, and optional reason
+ */
+export function getBitrateAdjustedCrf(
+  sourceInfo: VideoSourceInfo,
+  baseCrf: number
+): { adjustedCrf: number; adjustment: number; reason?: string } {
+  if (!sourceInfo.bitrate || sourceInfo.bitrate <= 0) {
+    return { adjustedCrf: baseCrf, adjustment: 0 }
+  }
+
+  const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
+  if (resolution === 'source') {
+    return { adjustedCrf: baseCrf, adjustment: 0 }
+  }
+
+  const thresholds = BITRATE_THRESHOLDS[resolution]
+  if (!thresholds) {
+    return { adjustedCrf: baseCrf, adjustment: 0 }
+  }
+
+  const bitrateMbps = (sourceInfo.bitrate / 1_000_000).toFixed(1)
+
+  if (sourceInfo.bitrate < thresholds.low) {
+    // Very low bitrate source - significant CRF increase to avoid artifacts
+    const adjustment = 3
+    return {
+      adjustedCrf: Math.min(baseCrf + adjustment, 45), // Cap at CRF 45
+      adjustment,
+      reason: `Low bitrate source (${bitrateMbps} Mbps) - raising CRF to avoid over-compression`
+    }
+  }
+
+  if (sourceInfo.bitrate < thresholds.medium) {
+    // Moderately compressed source - small CRF increase
+    const adjustment = 1
+    return {
+      adjustedCrf: Math.min(baseCrf + adjustment, 45),
+      adjustment,
+      reason: `Moderate bitrate source (${bitrateMbps} Mbps) - slight CRF adjustment`
+    }
+  }
+
+  // High bitrate source - use default CRF
+  return { adjustedCrf: baseCrf, adjustment: 0 }
+}
+
+/**
  * AV1 encoder type
  * - libaom-av1: Higher quality, slower (default, widely available)
  * - libsvtav1: Faster encoding, slightly lower quality (if available)
@@ -163,6 +240,7 @@ export interface ArchivalEncodingConfig {
   // Processing
   overwriteExisting: boolean
   deleteOriginal: boolean // Dangerous - disabled by default
+  deleteOutputIfLarger: boolean // Delete output and keep original if output is larger
 }
 
 /**
@@ -204,7 +282,8 @@ export const DEFAULT_ARCHIVAL_CONFIG: Omit<ArchivalEncodingConfig, 'outputDir'> 
   container: 'mkv', // Best for AV1 + various audio formats
   preserveStructure: false,
   overwriteExisting: false,
-  deleteOriginal: false // Safety: never auto-delete originals
+  deleteOriginal: false, // Safety: never auto-delete originals
+  deleteOutputIfLarger: true // Smart: delete output if it's larger than original
 }
 
 /**
@@ -286,6 +365,7 @@ export type ArchivalErrorType =
   | 'corrupt_input'
   | 'encoder_error'
   | 'cancelled'
+  | 'output_larger'
   | 'unknown'
 
 /**
@@ -358,7 +438,8 @@ export function getResolutionCategory(width: number, height: number): ArchivalRe
  */
 export function getOptimalCrf(
   sourceInfo: VideoSourceInfo,
-  customMatrix?: Partial<ArchivalCrfMatrix>
+  customMatrix?: Partial<ArchivalCrfMatrix>,
+  enableBitrateAdjustment: boolean = true
 ): number {
   const matrix = { ...ARCHIVAL_CRF_DEFAULTS, ...customMatrix }
   const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
@@ -366,10 +447,20 @@ export function getOptimalCrf(
   // Handle 'source' resolution by defaulting to 1080p CRF
   const lookupResolution = resolution === 'source' ? '1080p' : resolution
 
+  let baseCrf: number
   if (sourceInfo.isHdr) {
-    return matrix.hdr[lookupResolution] ?? matrix.hdr['1080p']
+    baseCrf = matrix.hdr[lookupResolution] ?? matrix.hdr['1080p']
+  } else {
+    baseCrf = matrix.sdr[lookupResolution] ?? matrix.sdr['1080p']
   }
-  return matrix.sdr[lookupResolution] ?? matrix.sdr['1080p']
+
+  // Apply bitrate-aware adjustment if enabled and bitrate is available
+  if (enableBitrateAdjustment && sourceInfo.bitrate) {
+    const { adjustedCrf } = getBitrateAdjustedCrf(sourceInfo, baseCrf)
+    return adjustedCrf
+  }
+
+  return baseCrf
 }
 
 /**
@@ -540,6 +631,7 @@ export function getErrorMessage(errorType: ArchivalErrorType, details?: string):
     corrupt_input: 'Input file appears to be corrupted or incomplete.',
     encoder_error: 'Encoder error occurred. Try a different encoder preset.',
     cancelled: 'Encoding was cancelled.',
+    output_larger: 'Output file is larger than original. Source may already be well-optimized.',
     unknown: 'An unexpected error occurred.'
   }
 

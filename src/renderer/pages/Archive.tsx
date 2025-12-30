@@ -8,10 +8,13 @@ import type {
 } from '../../preload/api'
 import {
   ARCHIVAL_PRESETS,
+  ARCHIVAL_CRF_DEFAULTS,
   hasDolbyVision,
   formatEta,
   formatSpeed,
   getErrorMessage,
+  getResolutionCategory,
+  getBitrateAdjustedCrf,
   type ArchivalPreset,
   type ArchivalErrorType
 } from '../../shared/types/archival.types'
@@ -73,6 +76,19 @@ export default function Archive(): JSX.Element {
   const [batchEta, setBatchEta] = useState<number | undefined>(undefined)
   const [batchSpeed, setBatchSpeed] = useState<number | undefined>(undefined)
   const [batchProgress, setBatchProgress] = useState<number>(0)
+  // Folder selection state
+  const [folderPath, setFolderPath] = useState<string | null>(null)
+  const [fileInfos, setFileInfos] = useState<Array<{ absolutePath: string; relativePath: string }>>([])
+  // Batch info state
+  const [batchInfo, setBatchInfo] = useState<{
+    totalDurationSeconds?: number
+    totalInputBytes?: number
+    estimatedOutputBytes?: number
+    availableBytes?: number
+    hasEnoughSpace?: boolean
+    existingCount?: number
+  } | null>(null)
+  const [isLoadingBatchInfo, setIsLoadingBatchInfo] = useState(false)
 
   // Load default config and encoder info on mount
   useEffect(() => {
@@ -229,6 +245,47 @@ export default function Archive(): JSX.Element {
     return () => clearTimeout(timeoutId)
   }, [inputPaths, outputDir, config])
 
+  // Fetch batch info when inputs and output are set
+  useEffect(() => {
+    if (inputPaths.length === 0 || !outputDir) {
+      setBatchInfo(null)
+      return
+    }
+
+    let active = true
+    setIsLoadingBatchInfo(true)
+
+    const timeoutId = setTimeout(() => {
+      window.api.archivalGetBatchInfo({
+        inputPaths,
+        outputDir
+      }).then((result) => {
+        if (!active) return
+        if (result.ok) {
+          setBatchInfo({
+            totalDurationSeconds: result.totalDurationSeconds,
+            totalInputBytes: result.totalInputBytes,
+            estimatedOutputBytes: result.estimatedOutputBytes,
+            availableBytes: result.availableBytes,
+            hasEnoughSpace: result.hasEnoughSpace,
+            existingCount: result.existingCount
+          })
+        }
+        setIsLoadingBatchInfo(false)
+      }).catch(() => {
+        if (active) {
+          setBatchInfo(null)
+          setIsLoadingBatchInfo(false)
+        }
+      })
+    }, 300)
+
+    return () => {
+      active = false
+      clearTimeout(timeoutId)
+    }
+  }, [inputPaths, outputDir])
+
   const handleSelectFiles = async (): Promise<void> => {
     try {
       const result = await window.api.archivalSelectFiles()
@@ -236,6 +293,10 @@ export default function Archive(): JSX.Element {
         setInputPaths(result.paths)
         setError(null)
         setIsDolbyVision(false)
+        // Clear folder selection state when selecting individual files
+        setFolderPath(null)
+        setFileInfos([])
+        setConfig((prev) => ({ ...prev, preserveStructure: false }))
 
         // Analyze first file for source info
         if (result.paths.length > 0) {
@@ -253,6 +314,39 @@ export default function Archive(): JSX.Element {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to select files')
+    }
+  }
+
+  const handleSelectFolder = async (): Promise<void> => {
+    try {
+      const result = await window.api.archivalSelectFolder()
+      if (result.ok && result.paths && result.fileInfo) {
+        setInputPaths(result.paths)
+        setFolderPath(result.folderPath ?? null)
+        setFileInfos(result.fileInfo)
+        setError(null)
+        setIsDolbyVision(false)
+
+        // Enable structure preservation when selecting a folder
+        setConfig((prev) => ({ ...prev, preserveStructure: true }))
+
+        // Analyze first file for source info
+        if (result.paths.length > 0) {
+          setIsAnalyzing(true)
+          const analyzeResult = await window.api.archivalAnalyzeVideo(result.paths[0])
+          if (analyzeResult.ok && analyzeResult.sourceInfo) {
+            setSourceInfo(analyzeResult.sourceInfo)
+            if (hasDolbyVision(analyzeResult.sourceInfo.hdrFormat)) {
+              setIsDolbyVision(true)
+            }
+          }
+          setIsAnalyzing(false)
+        }
+      } else if (result.error) {
+        setError(result.error)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to select folder')
     }
   }
 
@@ -294,7 +388,9 @@ export default function Archive(): JSX.Element {
       const result = await window.api.archivalStartBatch({
         inputPaths,
         outputDir,
-        config
+        config,
+        folderRoot: folderPath ?? undefined,
+        relativePaths: fileInfos.length > 0 ? fileInfos.map(f => f.relativePath) : undefined
       })
 
       if (!result.ok) {
@@ -307,6 +403,8 @@ export default function Archive(): JSX.Element {
         // Clear inputs after starting
         setInputPaths([])
         setSourceInfo(null)
+        setFolderPath(null)
+        setFileInfos([])
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start batch')
@@ -451,13 +549,44 @@ export default function Archive(): JSX.Element {
                   )}
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => void handleSelectFiles()}
-                className="mt-3 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500"
-              >
-                {inputPaths.length > 0 ? 'Change files' : 'Select files'}
-              </button>
+              {inputPaths.length > 100 && (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  <span className="font-medium">Large batch:</span> {inputPaths.length} files selected.
+                  This may take a while to process.
+                </div>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleSelectFiles()}
+                  className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  {inputPaths.length > 0 ? 'Change files' : 'Select files'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSelectFolder()}
+                  className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Select folder
+                </button>
+              </div>
+              {folderPath && (
+                <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
+                  <span>Folder: <span className="text-slate-600">{folderPath}</span></span>
+                  <label className="flex cursor-pointer items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={config.preserveStructure ?? true}
+                      onChange={(e) => handleConfigChange('preserveStructure', e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className={config.preserveStructure ? 'text-blue-700' : 'text-slate-500'}>
+                      Preserve folder structure
+                    </span>
+                  </label>
+                </div>
+              )}
             </div>
 
             {isAnalyzing && (
@@ -470,16 +599,39 @@ export default function Archive(): JSX.Element {
               </div>
             )}
 
-            {sourceInfo && (
-              <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                <span className="font-medium">Source:</span>{' '}
-                {sourceInfo.width}x{sourceInfo.height}{' '}
-                {sourceInfo.isHdr && <span className="rounded bg-violet-100 px-1 text-violet-700">HDR</span>}{' '}
-                {isDolbyVision && <span className="rounded bg-amber-100 px-1 text-amber-700">Dolby Vision</span>}{' '}
-                {Math.round(sourceInfo.frameRate)}fps{' '}
-                {formatDuration(sourceInfo.duration)}
-              </div>
-            )}
+            {sourceInfo && (() => {
+              // Compute CRF adjustment info
+              const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
+              const lookupRes = resolution === 'source' ? '1080p' : resolution
+              const baseCrf = sourceInfo.isHdr
+                ? ARCHIVAL_CRF_DEFAULTS.hdr[lookupRes as keyof typeof ARCHIVAL_CRF_DEFAULTS.hdr]
+                : ARCHIVAL_CRF_DEFAULTS.sdr[lookupRes as keyof typeof ARCHIVAL_CRF_DEFAULTS.sdr]
+              const crfInfo = sourceInfo.bitrate
+                ? getBitrateAdjustedCrf({ ...sourceInfo, bitrate: sourceInfo.bitrate }, baseCrf)
+                : null
+
+              return (
+                <div className="space-y-2">
+                  <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    <span className="font-medium">Source:</span>{' '}
+                    {sourceInfo.width}x{sourceInfo.height}{' '}
+                    {sourceInfo.isHdr && <span className="rounded bg-violet-100 px-1 text-violet-700">HDR</span>}{' '}
+                    {isDolbyVision && <span className="rounded bg-amber-100 px-1 text-amber-700">Dolby Vision</span>}{' '}
+                    {Math.round(sourceInfo.frameRate)}fps{' '}
+                    {sourceInfo.bitrate && (
+                      <span className="text-slate-500">{(sourceInfo.bitrate / 1_000_000).toFixed(1)} Mbps </span>
+                    )}
+                    {formatDuration(sourceInfo.duration)}
+                  </div>
+                  {crfInfo && crfInfo.adjustment > 0 && (
+                    <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-700">
+                      <span className="font-medium">CRF adjusted:</span>{' '}
+                      {baseCrf} → {crfInfo.adjustedCrf} ({crfInfo.reason})
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Dolby Vision Warning */}
             {isDolbyVision && (
@@ -545,6 +697,20 @@ export default function Archive(): JSX.Element {
               </div>
             </div>
 
+            {/* Output Format */}
+            <label className="block">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Output Format</span>
+              <select
+                value={config.container ?? 'mkv'}
+                onChange={(e) => handleConfigChange('container', e.target.value as PartialConfig['container'])}
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+              >
+                {CONTAINER_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </label>
+
             {/* Advanced Settings Toggle */}
             <button
               type="button"
@@ -573,20 +739,6 @@ export default function Archive(): JSX.Element {
                     className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                   >
                     {RESOLUTION_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                </label>
-
-                {/* Container */}
-                <label className="block">
-                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Container</span>
-                  <select
-                    value={config.container ?? 'mkv'}
-                    onChange={(e) => handleConfigChange('container', e.target.value as PartialConfig['container'])}
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-                  >
-                    {CONTAINER_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
@@ -706,6 +858,18 @@ export default function Archive(): JSX.Element {
                 />
                 <span className="text-sm text-slate-600">Overwrite existing files</span>
               </label>
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.deleteOutputIfLarger ?? true}
+                  onChange={(e) => handleConfigChange('deleteOutputIfLarger', e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                <div className="text-sm text-slate-600">
+                  <span>Skip if output is larger</span>
+                  <p className="text-xs text-slate-400">Keep original if re-encoding produces a larger file</p>
+                </div>
+              </label>
               <label className="flex items-center gap-3 text-rose-600">
                 <input
                   type="checkbox"
@@ -730,6 +894,86 @@ export default function Archive(): JSX.Element {
         </section>
       )}
 
+      {/* Batch Info Summary */}
+      {inputPaths.length > 0 && outputDir && (
+        <section className="rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
+          <h4 className="text-sm font-semibold text-slate-700">Batch Summary</h4>
+          {isLoadingBatchInfo ? (
+            <div className="mt-2 flex items-center gap-2 text-sm text-slate-500">
+              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Calculating...
+            </div>
+          ) : batchInfo ? (
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {/* Total Duration */}
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-400">Total Duration</p>
+                <p className="text-sm font-semibold text-slate-700">
+                  {batchInfo.totalDurationSeconds
+                    ? formatDuration(batchInfo.totalDurationSeconds)
+                    : '--'}
+                </p>
+              </div>
+              {/* Input Size */}
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-400">Total Input Size</p>
+                <p className="text-sm font-semibold text-slate-700">
+                  {batchInfo.totalInputBytes
+                    ? formatFileSize(batchInfo.totalInputBytes)
+                    : '--'}
+                </p>
+              </div>
+              {/* Estimated Output */}
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-xs text-slate-400">Est. Output Size</p>
+                <p className="text-sm font-semibold text-slate-700">
+                  {batchInfo.estimatedOutputBytes
+                    ? formatFileSize(batchInfo.estimatedOutputBytes)
+                    : '--'}
+                </p>
+              </div>
+              {/* Available Space */}
+              <div className={`rounded-lg px-3 py-2 ${
+                batchInfo.hasEnoughSpace === false
+                  ? 'bg-rose-50'
+                  : 'bg-slate-50'
+              }`}>
+                <p className="text-xs text-slate-400">Available Space</p>
+                <p className={`text-sm font-semibold ${
+                  batchInfo.hasEnoughSpace === false
+                    ? 'text-rose-600'
+                    : 'text-slate-700'
+                }`}>
+                  {batchInfo.availableBytes
+                    ? formatFileSize(batchInfo.availableBytes)
+                    : '--'}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Warnings */}
+          <div className="mt-2 space-y-2">
+            {batchInfo?.hasEnoughSpace === false && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                <span className="font-semibold">Not enough disk space!</span>{' '}
+                Need ~{batchInfo.estimatedOutputBytes ? formatFileSize(batchInfo.estimatedOutputBytes) : '?'}{' '}
+                but only {batchInfo.availableBytes ? formatFileSize(batchInfo.availableBytes) : '?'} available.
+              </div>
+            )}
+            {batchInfo && batchInfo.existingCount !== undefined && batchInfo.existingCount > 0 && !config.overwriteExisting && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                <span className="font-semibold">{batchInfo.existingCount} file{batchInfo.existingCount !== 1 ? 's' : ''} already exist</span>{' '}
+                and will be skipped. Enable "Overwrite existing files" to re-encode them.
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Start Button */}
       <section className="rounded-2xl border border-slate-200/70 bg-slate-900 p-6 text-white shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -737,6 +981,7 @@ export default function Archive(): JSX.Element {
             <h3 className="text-xl font-semibold">Start Archival Batch</h3>
             <p className="mt-1 text-sm text-slate-300">
               {inputPaths.length} file{inputPaths.length !== 1 ? 's' : ''} ready to encode
+              {batchInfo?.totalDurationSeconds ? ` · ${formatDuration(batchInfo.totalDurationSeconds)} total` : ''}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -877,13 +1122,24 @@ export default function Archive(): JSX.Element {
                     </div>
                   </div>
                 )}
-                {item.status === 'completed' && item.compressionRatio != null && (
+                {item.status === 'completed' && item.compressionRatio != null && item.compressionRatio >= 1 && (
                   <p className="mt-1 text-[10px] text-emerald-600">
                     Compressed to {(100 / item.compressionRatio).toFixed(0)}% of original
                     {item.outputSize != null && ` (${formatFileSize(item.outputSize)})`}
                   </p>
                 )}
-                {item.error && (
+                {item.status === 'completed' && item.compressionRatio != null && item.compressionRatio < 1 && (
+                  <p className="mt-1 text-[10px] text-amber-600">
+                    Warning: Output is {(100 / item.compressionRatio).toFixed(0)}% of original (larger)
+                    {item.outputSize != null && ` (${formatFileSize(item.outputSize)})`}
+                  </p>
+                )}
+                {item.errorType === 'output_larger' && (
+                  <p className="mt-1 text-[10px] text-amber-600">
+                    Skipped: Output would be larger than original ({item.compressionRatio && item.compressionRatio < 1 ? `${(100 / item.compressionRatio).toFixed(0)}% of original` : 'no savings'})
+                  </p>
+                )}
+                {item.error && item.errorType !== 'output_larger' && (
                   <p className="mt-1 text-[10px] text-rose-600">
                     {item.errorType ? getErrorMessage(item.errorType as ArchivalErrorType) : item.error}
                   </p>

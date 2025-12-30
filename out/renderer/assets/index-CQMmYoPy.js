@@ -7725,6 +7725,80 @@ function useVideoSmartTagging(videoId, videoPath) {
     cleanup: handleCleanup
   };
 }
+const ARCHIVAL_CRF_DEFAULTS = {
+  hdr: {
+    "4k": 29,
+    // Ultra-safe: 28, aggressive: 30 max
+    "1440p": 28,
+    // aggressive: 29 max
+    "1080p": 28,
+    // default 28, aggressive: 29 max
+    "720p": 27,
+    // aggressive: 28 max
+    "480p": 27,
+    "360p": 27
+  },
+  sdr: {
+    "4k": 30,
+    // aggressive: 31 max
+    "1440p": 31,
+    // aggressive: 32 max
+    "1080p": 29,
+    // aggressive: 31-32 max
+    "720p": 32,
+    // default 32, aggressive: 34 max
+    "480p": 34,
+    // default 34
+    "360p": 36
+    // default 36, aggressive: 37 max
+  }
+};
+const BITRATE_THRESHOLDS = {
+  "4k": { low: 8e6, medium: 15e6 },
+  // 8 Mbps / 15 Mbps
+  "1440p": { low: 4e6, medium: 8e6 },
+  // 4 Mbps / 8 Mbps
+  "1080p": { low: 25e5, medium: 5e6 },
+  // 2.5 Mbps / 5 Mbps
+  "720p": { low: 15e5, medium: 3e6 },
+  // 1.5 Mbps / 3 Mbps
+  "480p": { low: 8e5, medium: 15e5 },
+  // 800 kbps / 1.5 Mbps
+  "360p": { low: 4e5, medium: 8e5 }
+  // 400 kbps / 800 kbps
+};
+function getBitrateAdjustedCrf(sourceInfo, baseCrf) {
+  if (!sourceInfo.bitrate || sourceInfo.bitrate <= 0) {
+    return { adjustedCrf: baseCrf, adjustment: 0 };
+  }
+  const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
+  if (resolution === "source") {
+    return { adjustedCrf: baseCrf, adjustment: 0 };
+  }
+  const thresholds = BITRATE_THRESHOLDS[resolution];
+  if (!thresholds) {
+    return { adjustedCrf: baseCrf, adjustment: 0 };
+  }
+  const bitrateMbps = (sourceInfo.bitrate / 1e6).toFixed(1);
+  if (sourceInfo.bitrate < thresholds.low) {
+    const adjustment = 3;
+    return {
+      adjustedCrf: Math.min(baseCrf + adjustment, 45),
+      // Cap at CRF 45
+      adjustment,
+      reason: `Low bitrate source (${bitrateMbps} Mbps) - raising CRF to avoid over-compression`
+    };
+  }
+  if (sourceInfo.bitrate < thresholds.medium) {
+    const adjustment = 1;
+    return {
+      adjustedCrf: Math.min(baseCrf + adjustment, 45),
+      adjustment,
+      reason: `Moderate bitrate source (${bitrateMbps} Mbps) - slight CRF adjustment`
+    };
+  }
+  return { adjustedCrf: baseCrf, adjustment: 0 };
+}
 const DEFAULT_ARCHIVAL_CONFIG = {
   av1: {
     encoder: "libsvtav1",
@@ -7774,6 +7848,15 @@ const ARCHIVAL_PRESETS = {
     }
   }
 };
+function getResolutionCategory(width, height) {
+  const pixels = Math.max(width, height);
+  if (pixels >= 3840) return "4k";
+  if (pixels >= 2560) return "1440p";
+  if (pixels >= 1920) return "1080p";
+  if (pixels >= 1280) return "720p";
+  if (pixels >= 854) return "480p";
+  return "360p";
+}
 function hasDolbyVision(hdrFormat) {
   if (!hdrFormat) return false;
   const lower = hdrFormat.toLowerCase();
@@ -7788,6 +7871,7 @@ function getErrorMessage(errorType, details) {
     corrupt_input: "Input file appears to be corrupted or incomplete.",
     encoder_error: "Encoder error occurred. Try a different encoder preset.",
     cancelled: "Encoding was cancelled.",
+    output_larger: "Output file is larger than original. Source may already be well-optimized.",
     unknown: "An unexpected error occurred."
   };
   const base = messages[errorType];
@@ -7860,6 +7944,10 @@ function Archive() {
   const [batchEta, setBatchEta] = reactExports.useState(void 0);
   const [batchSpeed, setBatchSpeed] = reactExports.useState(void 0);
   const [batchProgress, setBatchProgress] = reactExports.useState(0);
+  const [folderPath, setFolderPath] = reactExports.useState(null);
+  const [fileInfos, setFileInfos] = reactExports.useState([]);
+  const [batchInfo, setBatchInfo] = reactExports.useState(null);
+  const [isLoadingBatchInfo, setIsLoadingBatchInfo] = reactExports.useState(false);
   reactExports.useEffect(() => {
     let active = true;
     Promise.all([
@@ -7992,6 +8080,42 @@ function Archive() {
     }, 200);
     return () => clearTimeout(timeoutId);
   }, [inputPaths, outputDir, config]);
+  reactExports.useEffect(() => {
+    if (inputPaths.length === 0 || !outputDir) {
+      setBatchInfo(null);
+      return;
+    }
+    let active = true;
+    setIsLoadingBatchInfo(true);
+    const timeoutId = setTimeout(() => {
+      window.api.archivalGetBatchInfo({
+        inputPaths,
+        outputDir
+      }).then((result) => {
+        if (!active) return;
+        if (result.ok) {
+          setBatchInfo({
+            totalDurationSeconds: result.totalDurationSeconds,
+            totalInputBytes: result.totalInputBytes,
+            estimatedOutputBytes: result.estimatedOutputBytes,
+            availableBytes: result.availableBytes,
+            hasEnoughSpace: result.hasEnoughSpace,
+            existingCount: result.existingCount
+          });
+        }
+        setIsLoadingBatchInfo(false);
+      }).catch(() => {
+        if (active) {
+          setBatchInfo(null);
+          setIsLoadingBatchInfo(false);
+        }
+      });
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timeoutId);
+    };
+  }, [inputPaths, outputDir]);
   const handleSelectFiles = async () => {
     try {
       const result = await window.api.archivalSelectFiles();
@@ -7999,6 +8123,9 @@ function Archive() {
         setInputPaths(result.paths);
         setError(null);
         setIsDolbyVision(false);
+        setFolderPath(null);
+        setFileInfos([]);
+        setConfig((prev) => ({ ...prev, preserveStructure: false }));
         if (result.paths.length > 0) {
           setIsAnalyzing(true);
           const analyzeResult = await window.api.archivalAnalyzeVideo(result.paths[0]);
@@ -8013,6 +8140,34 @@ function Archive() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to select files");
+    }
+  };
+  const handleSelectFolder = async () => {
+    try {
+      const result = await window.api.archivalSelectFolder();
+      if (result.ok && result.paths && result.fileInfo) {
+        setInputPaths(result.paths);
+        setFolderPath(result.folderPath ?? null);
+        setFileInfos(result.fileInfo);
+        setError(null);
+        setIsDolbyVision(false);
+        setConfig((prev) => ({ ...prev, preserveStructure: true }));
+        if (result.paths.length > 0) {
+          setIsAnalyzing(true);
+          const analyzeResult = await window.api.archivalAnalyzeVideo(result.paths[0]);
+          if (analyzeResult.ok && analyzeResult.sourceInfo) {
+            setSourceInfo(analyzeResult.sourceInfo);
+            if (hasDolbyVision(analyzeResult.sourceInfo.hdrFormat)) {
+              setIsDolbyVision(true);
+            }
+          }
+          setIsAnalyzing(false);
+        }
+      } else if (result.error) {
+        setError(result.error);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to select folder");
     }
   };
   const handlePresetChange = (preset) => {
@@ -8049,7 +8204,9 @@ function Archive() {
       const result = await window.api.archivalStartBatch({
         inputPaths,
         outputDir,
-        config
+        config,
+        folderRoot: folderPath ?? void 0,
+        relativePaths: fileInfos.length > 0 ? fileInfos.map((f2) => f2.relativePath) : void 0
       });
       if (!result.ok) {
         setError(result.error ?? "Failed to start batch");
@@ -8059,6 +8216,8 @@ function Archive() {
         setCurrentJob(result.job);
         setInputPaths([]);
         setSourceInfo(null);
+        setFolderPath(null);
+        setFileInfos([]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start batch");
@@ -8164,15 +8323,50 @@ function Archive() {
                 " more"
               ] })
             ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                type: "button",
-                onClick: () => void handleSelectFiles(),
-                className: "mt-3 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500",
-                children: inputPaths.length > 0 ? "Change files" : "Select files"
-              }
-            )
+            inputPaths.length > 100 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-medium", children: "Large batch:" }),
+              " ",
+              inputPaths.length,
+              " files selected. This may take a while to process."
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-3 flex flex-wrap gap-2", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  type: "button",
+                  onClick: () => void handleSelectFiles(),
+                  className: "rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500",
+                  children: inputPaths.length > 0 ? "Change files" : "Select files"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  type: "button",
+                  onClick: () => void handleSelectFolder(),
+                  className: "rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500",
+                  children: "Select folder"
+                }
+              )
+            ] }),
+            folderPath && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2 flex items-center gap-3 text-xs text-slate-500", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+                "Folder: ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-600", children: folderPath })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex cursor-pointer items-center gap-1.5", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "checkbox",
+                    checked: config.preserveStructure ?? true,
+                    onChange: (e) => handleConfigChange("preserveStructure", e.target.checked),
+                    className: "h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: config.preserveStructure ? "text-blue-700" : "text-slate-500", children: "Preserve folder structure" })
+              ] })
+            ] })
           ] }),
           isAnalyzing && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2 text-sm text-slate-500", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsxs("svg", { className: "h-4 w-4 animate-spin", viewBox: "0 0 24 24", fill: "none", children: [
@@ -8181,22 +8375,44 @@ function Archive() {
             ] }),
             "Analyzing video..."
           ] }),
-          sourceInfo && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-medium", children: "Source:" }),
-            " ",
-            sourceInfo.width,
-            "x",
-            sourceInfo.height,
-            " ",
-            sourceInfo.isHdr && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded bg-violet-100 px-1 text-violet-700", children: "HDR" }),
-            " ",
-            isDolbyVision && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded bg-amber-100 px-1 text-amber-700", children: "Dolby Vision" }),
-            " ",
-            Math.round(sourceInfo.frameRate),
-            "fps",
-            " ",
-            formatDuration2(sourceInfo.duration)
-          ] }),
+          sourceInfo && (() => {
+            const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
+            const lookupRes = resolution === "source" ? "1080p" : resolution;
+            const baseCrf = sourceInfo.isHdr ? ARCHIVAL_CRF_DEFAULTS.hdr[lookupRes] : ARCHIVAL_CRF_DEFAULTS.sdr[lookupRes];
+            const crfInfo = sourceInfo.bitrate ? getBitrateAdjustedCrf({ ...sourceInfo, bitrate: sourceInfo.bitrate }, baseCrf) : null;
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-2", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-medium", children: "Source:" }),
+                " ",
+                sourceInfo.width,
+                "x",
+                sourceInfo.height,
+                " ",
+                sourceInfo.isHdr && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded bg-violet-100 px-1 text-violet-700", children: "HDR" }),
+                " ",
+                isDolbyVision && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded bg-amber-100 px-1 text-amber-700", children: "Dolby Vision" }),
+                " ",
+                Math.round(sourceInfo.frameRate),
+                "fps",
+                " ",
+                sourceInfo.bitrate && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-slate-500", children: [
+                  (sourceInfo.bitrate / 1e6).toFixed(1),
+                  " Mbps "
+                ] }),
+                formatDuration2(sourceInfo.duration)
+              ] }),
+              crfInfo && crfInfo.adjustment > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-700", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-medium", children: "CRF adjusted:" }),
+                " ",
+                baseCrf,
+                " → ",
+                crfInfo.adjustedCrf,
+                " (",
+                crfInfo.reason,
+                ")"
+              ] })
+            ] });
+          })(),
           isDolbyVision && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "rounded-lg border border-amber-200 bg-amber-50 px-4 py-3", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start gap-3", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-lg", children: "⚠" }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
@@ -8239,6 +8455,18 @@ function Archive() {
               preset.value
             )) })
           ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "block", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: "Output Format" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "select",
+              {
+                value: config.container ?? "mkv",
+                onChange: (e) => handleConfigChange("container", e.target.value),
+                className: "mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm",
+                children: CONTAINER_OPTIONS.map((opt) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: opt.value, children: opt.label }, opt.value))
+              }
+            )
+          ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs(
             "button",
             {
@@ -8270,18 +8498,6 @@ function Archive() {
                   onChange: (e) => handleConfigChange("resolution", e.target.value),
                   className: "mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm",
                   children: RESOLUTION_OPTIONS.map((opt) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: opt.value, children: opt.label }, opt.value))
-                }
-              )
-            ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "block", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: "Container" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "select",
-                {
-                  value: config.container ?? "mkv",
-                  onChange: (e) => handleConfigChange("container", e.target.value),
-                  className: "mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm",
-                  children: CONTAINER_OPTIONS.map((opt) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: opt.value, children: opt.label }, opt.value))
                 }
               )
             ] }),
@@ -8399,6 +8615,21 @@ function Archive() {
               ),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm text-slate-600", children: "Overwrite existing files" })
             ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: config.deleteOutputIfLarger ?? true,
+                  onChange: (e) => handleConfigChange("deleteOutputIfLarger", e.target.checked),
+                  className: "h-4 w-4 rounded border-slate-300"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-sm text-slate-600", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Skip if output is larger" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Keep original if re-encoding produces a larger file" })
+              ] })
+            ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3 text-rose-600", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "input",
@@ -8422,6 +8653,55 @@ function Archive() {
         previewCommand.join(" ")
       ] })
     ] }),
+    inputPaths.length > 0 && outputDir && /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h4", { className: "text-sm font-semibold text-slate-700", children: "Batch Summary" }),
+      isLoadingBatchInfo ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2 flex items-center gap-2 text-sm text-slate-500", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("svg", { className: "h-4 w-4 animate-spin", viewBox: "0 0 24 24", fill: "none", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { className: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", strokeWidth: "4" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("path", { className: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+        ] }),
+        "Calculating..."
+      ] }) : batchInfo ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg bg-slate-50 px-3 py-2", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Total Duration" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-semibold text-slate-700", children: batchInfo.totalDurationSeconds ? formatDuration2(batchInfo.totalDurationSeconds) : "--" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg bg-slate-50 px-3 py-2", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Total Input Size" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-semibold text-slate-700", children: batchInfo.totalInputBytes ? formatFileSize2(batchInfo.totalInputBytes) : "--" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg bg-slate-50 px-3 py-2", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Est. Output Size" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-semibold text-slate-700", children: batchInfo.estimatedOutputBytes ? formatFileSize2(batchInfo.estimatedOutputBytes) : "--" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: `rounded-lg px-3 py-2 ${batchInfo.hasEnoughSpace === false ? "bg-rose-50" : "bg-slate-50"}`, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Available Space" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: `text-sm font-semibold ${batchInfo.hasEnoughSpace === false ? "text-rose-600" : "text-slate-700"}`, children: batchInfo.availableBytes ? formatFileSize2(batchInfo.availableBytes) : "--" })
+        ] })
+      ] }) : null,
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2 space-y-2", children: [
+        batchInfo?.hasEnoughSpace === false && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-semibold", children: "Not enough disk space!" }),
+          " ",
+          "Need ~",
+          batchInfo.estimatedOutputBytes ? formatFileSize2(batchInfo.estimatedOutputBytes) : "?",
+          " ",
+          "but only ",
+          batchInfo.availableBytes ? formatFileSize2(batchInfo.availableBytes) : "?",
+          " available."
+        ] }),
+        batchInfo && batchInfo.existingCount !== void 0 && batchInfo.existingCount > 0 && !config.overwriteExisting && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "font-semibold", children: [
+            batchInfo.existingCount,
+            " file",
+            batchInfo.existingCount !== 1 ? "s" : "",
+            " already exist"
+          ] }),
+          " ",
+          'and will be skipped. Enable "Overwrite existing files" to re-encode them.'
+        ] })
+      ] })
+    ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "rounded-2xl border border-slate-200/70 bg-slate-900 p-6 text-white shadow-lg", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-wrap items-center justify-between gap-4", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
@@ -8430,7 +8710,8 @@ function Archive() {
             inputPaths.length,
             " file",
             inputPaths.length !== 1 ? "s" : "",
-            " ready to encode"
+            " ready to encode",
+            batchInfo?.totalDurationSeconds ? ` · ${formatDuration2(batchInfo.totalDurationSeconds)} total` : ""
           ] })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-3", children: [
@@ -8562,13 +8843,24 @@ function Archive() {
             ] })
           ] })
         ] }),
-        item.status === "completed" && item.compressionRatio != null && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-1 text-[10px] text-emerald-600", children: [
+        item.status === "completed" && item.compressionRatio != null && item.compressionRatio >= 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-1 text-[10px] text-emerald-600", children: [
           "Compressed to ",
           (100 / item.compressionRatio).toFixed(0),
           "% of original",
           item.outputSize != null && ` (${formatFileSize2(item.outputSize)})`
         ] }),
-        item.error && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-[10px] text-rose-600", children: item.errorType ? getErrorMessage(item.errorType) : item.error })
+        item.status === "completed" && item.compressionRatio != null && item.compressionRatio < 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-1 text-[10px] text-amber-600", children: [
+          "Warning: Output is ",
+          (100 / item.compressionRatio).toFixed(0),
+          "% of original (larger)",
+          item.outputSize != null && ` (${formatFileSize2(item.outputSize)})`
+        ] }),
+        item.errorType === "output_larger" && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-1 text-[10px] text-amber-600", children: [
+          "Skipped: Output would be larger than original (",
+          item.compressionRatio && item.compressionRatio < 1 ? `${(100 / item.compressionRatio).toFixed(0)}% of original` : "no savings",
+          ")"
+        ] }),
+        item.error && item.errorType !== "output_larger" && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-[10px] text-rose-600", children: item.errorType ? getErrorMessage(item.errorType) : item.error })
       ] }, item.id)) })
     ] })
   ] });

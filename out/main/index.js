@@ -1,5 +1,5 @@
 import require$$1$4, { app, ipcMain, BrowserWindow, dialog, shell, safeStorage, clipboard, protocol, net } from "electron";
-import { join, basename, extname, dirname, parse as parse$7 } from "node:path";
+import { join, basename, extname, dirname, parse as parse$7, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdir as mkdir$4, writeFile as writeFile$1, unlink, stat as stat$5, readdir, readFile as readFile$1, open, rm, access, chmod, rename as rename$2, appendFile, watch, constants as constants$4, copyFile as copyFile$2 } from "node:fs/promises";
 import { statSync, mkdirSync, existsSync, accessSync, constants as constants$3, createWriteStream, readFileSync as readFileSync$1, watch as watch$1 } from "node:fs";
@@ -5159,6 +5159,52 @@ const ARCHIVAL_CRF_DEFAULTS = {
     // default 36, aggressive: 37 max
   }
 };
+const BITRATE_THRESHOLDS = {
+  "4k": { low: 8e6, medium: 15e6 },
+  // 8 Mbps / 15 Mbps
+  "1440p": { low: 4e6, medium: 8e6 },
+  // 4 Mbps / 8 Mbps
+  "1080p": { low: 25e5, medium: 5e6 },
+  // 2.5 Mbps / 5 Mbps
+  "720p": { low: 15e5, medium: 3e6 },
+  // 1.5 Mbps / 3 Mbps
+  "480p": { low: 8e5, medium: 15e5 },
+  // 800 kbps / 1.5 Mbps
+  "360p": { low: 4e5, medium: 8e5 }
+  // 400 kbps / 800 kbps
+};
+function getBitrateAdjustedCrf(sourceInfo, baseCrf) {
+  if (!sourceInfo.bitrate || sourceInfo.bitrate <= 0) {
+    return { adjustedCrf: baseCrf, adjustment: 0 };
+  }
+  const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
+  if (resolution === "source") {
+    return { adjustedCrf: baseCrf, adjustment: 0 };
+  }
+  const thresholds = BITRATE_THRESHOLDS[resolution];
+  if (!thresholds) {
+    return { adjustedCrf: baseCrf, adjustment: 0 };
+  }
+  const bitrateMbps = (sourceInfo.bitrate / 1e6).toFixed(1);
+  if (sourceInfo.bitrate < thresholds.low) {
+    const adjustment = 3;
+    return {
+      adjustedCrf: Math.min(baseCrf + adjustment, 45),
+      // Cap at CRF 45
+      adjustment,
+      reason: `Low bitrate source (${bitrateMbps} Mbps) - raising CRF to avoid over-compression`
+    };
+  }
+  if (sourceInfo.bitrate < thresholds.medium) {
+    const adjustment = 1;
+    return {
+      adjustedCrf: Math.min(baseCrf + adjustment, 45),
+      adjustment,
+      reason: `Moderate bitrate source (${bitrateMbps} Mbps) - slight CRF adjustment`
+    };
+  }
+  return { adjustedCrf: baseCrf, adjustment: 0 };
+}
 const DEFAULT_ARCHIVAL_CONFIG = {
   resolution: "source",
   colorMode: "auto",
@@ -5190,8 +5236,10 @@ const DEFAULT_ARCHIVAL_CONFIG = {
   // Best for AV1 + various audio formats
   preserveStructure: false,
   overwriteExisting: false,
-  deleteOriginal: false
+  deleteOriginal: false,
   // Safety: never auto-delete originals
+  deleteOutputIfLarger: true
+  // Smart: delete output if it's larger than original
 };
 ({
   // Recommended: Good balance of quality and speed
@@ -5222,14 +5270,21 @@ function getResolutionCategory(width, height) {
   if (pixels >= 854) return "480p";
   return "360p";
 }
-function getOptimalCrf(sourceInfo, customMatrix) {
+function getOptimalCrf(sourceInfo, customMatrix, enableBitrateAdjustment = true) {
   const matrix = { ...ARCHIVAL_CRF_DEFAULTS, ...customMatrix };
   const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
   const lookupResolution = resolution === "source" ? "1080p" : resolution;
+  let baseCrf;
   if (sourceInfo.isHdr) {
-    return matrix.hdr[lookupResolution] ?? matrix.hdr["1080p"];
+    baseCrf = matrix.hdr[lookupResolution] ?? matrix.hdr["1080p"];
+  } else {
+    baseCrf = matrix.sdr[lookupResolution] ?? matrix.sdr["1080p"];
   }
-  return matrix.sdr[lookupResolution] ?? matrix.sdr["1080p"];
+  if (enableBitrateAdjustment && sourceInfo.bitrate) {
+    const { adjustedCrf } = getBitrateAdjustedCrf(sourceInfo, baseCrf);
+    return adjustedCrf;
+  }
+  return baseCrf;
 }
 function detectHdr(colorSpace, hdrFormat, bitDepth) {
   if (hdrFormat) {
@@ -5301,8 +5356,8 @@ function buildArchivalFFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   } else {
     args.push(...buildAudioArgs(config));
   }
-  args.push("-c:s", "copy");
-  args.push("-map", "0");
+  args.push("-map", "0:v:0");
+  args.push("-map", "0:a?");
   if (config.container === "mp4") {
     args.push("-movflags", "+faststart");
   }
@@ -5858,7 +5913,7 @@ class ArchivalService {
   /**
    * Start a batch archival job
    */
-  async startBatch(inputPaths, outputDir, configOverrides) {
+  async startBatch(inputPaths, outputDir, configOverrides, folderRoot, relativePaths) {
     if (this.activeJob && this.activeJob.status === "running") {
       throw new Error("Another archival job is already running");
     }
@@ -5897,10 +5952,15 @@ class ArchivalService {
       config.av1 = { ...config.av1, encoder: bestEncoder };
     }
     const batchId = randomUUID();
-    const items = inputPaths.map((inputPath) => ({
+    const items = inputPaths.map((inputPath, index) => ({
       id: randomUUID(),
       inputPath,
-      outputPath: this.buildOutputPath(inputPath, outputDir, config),
+      outputPath: this.buildOutputPath(
+        inputPath,
+        outputDir,
+        config,
+        relativePaths?.[index]
+      ),
       status: "queued",
       progress: 0
     }));
@@ -5978,6 +6038,42 @@ class ArchivalService {
       sourceInfo,
       effectiveCrf,
       ...estimate
+    };
+  }
+  /**
+   * Get batch info including total duration and existing files count
+   * Used for pre-flight checks before starting encoding
+   */
+  async getBatchInfo(inputPaths, outputDir) {
+    let totalDurationSeconds = 0;
+    let totalInputBytes = 0;
+    let existingCount = 0;
+    const containerExtensions = ["mkv", "mp4", "webm"];
+    for (const inputPath of inputPaths) {
+      try {
+        const inputStat = await stat$5(inputPath);
+        totalInputBytes += inputStat.size;
+        const meta = await this.metadata.extract({ filePath: inputPath });
+        if (meta.duration) {
+          totalDurationSeconds += meta.duration;
+        }
+        const inputName = basename(inputPath, extname(inputPath));
+        for (const ext of containerExtensions) {
+          const outputPath = join(outputDir, `${inputName}.${ext}`);
+          try {
+            await access(outputPath);
+            existingCount++;
+            break;
+          } catch {
+          }
+        }
+      } catch {
+      }
+    }
+    return {
+      totalDurationSeconds,
+      totalInputBytes,
+      existingCount
     };
   }
   /**
@@ -6060,6 +6156,32 @@ class ArchivalService {
       const outputStat = await stat$5(item.outputPath);
       item.outputSize = outputStat.size;
       item.compressionRatio = item.inputSize ? item.inputSize / item.outputSize : void 0;
+      const outputLarger = item.inputSize && item.outputSize > item.inputSize;
+      if (outputLarger && this.activeJob.config.deleteOutputIfLarger) {
+        await this.cleanupPartialOutput(item.outputPath);
+        item.status = "skipped";
+        item.error = `Output (${this.formatBytes(item.outputSize)}) larger than input (${this.formatBytes(item.inputSize)})`;
+        item.errorType = "output_larger";
+        item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+        this.activeJob.skippedItems++;
+        this.emitEvent({
+          batchId: this.activeJob.id,
+          itemId: item.id,
+          kind: "item_complete",
+          progress: 100,
+          status: "skipped",
+          error: item.error,
+          errorType: "output_larger",
+          outputSize: item.outputSize,
+          compressionRatio: item.compressionRatio
+        });
+        this.logger.info("Skipped - output larger than input", {
+          input: basename(item.inputPath),
+          inputSize: item.inputSize,
+          outputSize: item.outputSize
+        });
+        return;
+      }
       if (this.activeJob) {
         this.activeJob.actualOutputBytes = (this.activeJob.actualOutputBytes ?? 0) + item.outputSize;
         if (sourceInfo.duration) {
@@ -6070,6 +6192,7 @@ class ArchivalService {
       item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
       item.progress = 100;
       this.activeJob.completedItems++;
+      const warningMsg = outputLarger ? ` (WARNING: output larger than input)` : "";
       this.emitEvent({
         batchId: this.activeJob.id,
         itemId: item.id,
@@ -6079,10 +6202,11 @@ class ArchivalService {
         outputSize: item.outputSize,
         compressionRatio: item.compressionRatio
       });
-      this.logger.info("Completed archival encoding", {
+      this.logger.info(`Completed archival encoding${warningMsg}`, {
         input: basename(item.inputPath),
         output: basename(item.outputPath),
-        ratio: item.compressionRatio?.toFixed(2)
+        ratio: item.compressionRatio?.toFixed(2),
+        outputLarger
       });
     } catch (error2) {
       const message = error2 instanceof Error ? error2.message : "Unknown error";
@@ -6126,7 +6250,8 @@ class ArchivalService {
       bitDepth: extendedMeta.bitDepth,
       colorSpace: extendedMeta.colorSpace,
       hdrFormat: extendedMeta.hdrFormat,
-      isHdr
+      isHdr,
+      bitrate: meta.bitrate ?? void 0
     };
   }
   /**
@@ -6344,8 +6469,31 @@ class ArchivalService {
             stderr: stderr.slice(-2048)
             // Last 2KB in log
           });
-          const errorMatch = stderr.match(/Error[^\n]*|error[^\n]*|Invalid[^\n]*|No space[^\n]*/i);
-          const errorMsg = errorMatch ? errorMatch[0] : `FFmpeg exited with code ${code}`;
+          const errorPatterns = [
+            /Error[^\n]*/i,
+            /error[^\n]*/i,
+            /Invalid[^\n]*/i,
+            /No space[^\n]*/i,
+            /Unknown encoder[^\n]*/i,
+            /Encoder .* not found[^\n]*/i,
+            /Option .* not found[^\n]*/i,
+            /Unrecognized option[^\n]*/i,
+            /Could not[^\n]*/i,
+            /Cannot[^\n]*/i
+          ];
+          let errorMsg = `FFmpeg exited with code ${code}`;
+          for (const pattern of errorPatterns) {
+            const match = stderr.match(pattern);
+            if (match) {
+              errorMsg = match[0].trim();
+              break;
+            }
+          }
+          const stderrLines = stderr.trim().split("\n").filter((l) => l.trim());
+          const lastLines = stderrLines.slice(-3).join(" | ");
+          if (lastLines && !errorMsg.includes(lastLines.slice(0, 50))) {
+            errorMsg = `${errorMsg} - ${lastLines.slice(0, 200)}`;
+          }
           const errorType = classifyError(stderr || errorMsg);
           const error2 = new Error(errorMsg);
           error2.errorType = errorType;
@@ -6382,6 +6530,15 @@ class ArchivalService {
     }
   }
   /**
+   * Format bytes to human-readable string
+   */
+  formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+  /**
    * Parse time string (HH:MM:SS.mmm or HH:MM:SS) to milliseconds
    */
   parseTimeToMs(timeStr) {
@@ -6406,9 +6563,15 @@ class ArchivalService {
   /**
    * Build output path for a video, handling duplicates
    */
-  buildOutputPath(inputPath, outputDir, config) {
+  buildOutputPath(inputPath, outputDir, config, relativePath) {
     const inputName = basename(inputPath, extname(inputPath));
     const extension = config.container;
+    if (config.preserveStructure && relativePath) {
+      const relativeDir = dirname(relativePath);
+      if (relativeDir && relativeDir !== ".") {
+        return join(outputDir, relativeDir, `${inputName}.${extension}`);
+      }
+    }
     return join(outputDir, `${inputName}.${extension}`);
   }
   /**
@@ -6436,6 +6599,48 @@ class ArchivalService {
   emitEvent(event) {
     this.onEvent?.(event);
   }
+}
+const VIDEO_EXTENSIONS = /* @__PURE__ */ new Set([
+  ".mp4",
+  ".mkv",
+  ".mov",
+  ".webm",
+  ".avi",
+  ".m4v",
+  ".ts",
+  ".mts",
+  ".m2ts",
+  ".flv",
+  ".wmv"
+]);
+const IGNORED_DIRS = /* @__PURE__ */ new Set([".drapp", ".git", "node_modules", "$RECYCLE.BIN", "System Volume Information"]);
+async function findVideoFilesRecursively(rootPath, basePath = rootPath) {
+  const files = [];
+  async function walk(dir) {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) {
+            continue;
+          }
+          await walk(fullPath);
+        } else if (entry.isFile()) {
+          const ext = extname(entry.name).toLowerCase();
+          if (VIDEO_EXTENSIONS.has(ext)) {
+            files.push({
+              absolutePath: fullPath,
+              relativePath: relative(basePath, fullPath)
+            });
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  await walk(rootPath);
+  return files;
 }
 let archivalService = null;
 function getMainWindow() {
@@ -6485,6 +6690,36 @@ function registerArchivalHandlers() {
     }
     return { ok: true, path: result.filePaths[0] };
   });
+  ipcMain.handle("archival/select-folder", async () => {
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    const dialogOptions = {
+      properties: ["openDirectory"],
+      title: "Select Folder for Archival Processing"
+    };
+    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    const folderPath = result.filePaths[0];
+    try {
+      const videoFiles = await findVideoFilesRecursively(folderPath);
+      if (videoFiles.length === 0) {
+        return { ok: false, error: "No video files found in the selected folder" };
+      }
+      videoFiles.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+      return {
+        ok: true,
+        folderPath,
+        paths: videoFiles.map((f) => f.absolutePath),
+        fileInfo: videoFiles
+      };
+    } catch (error2) {
+      return {
+        ok: false,
+        error: error2 instanceof Error ? error2.message : "Failed to scan folder"
+      };
+    }
+  });
   ipcMain.handle("archival/get-default-config", async () => {
     return {
       ok: true,
@@ -6525,7 +6760,7 @@ function registerArchivalHandlers() {
   ipcMain.handle(
     "archival/start-batch",
     async (_event, request) => {
-      const { inputPaths, outputDir, config } = request;
+      const { inputPaths, outputDir, config, folderRoot, relativePaths } = request;
       if (!inputPaths || inputPaths.length === 0) {
         return { ok: false, error: "No input files specified" };
       }
@@ -6534,7 +6769,7 @@ function registerArchivalHandlers() {
       }
       try {
         const service = getService();
-        const job = await service.startBatch(inputPaths, outputDir, config);
+        const job = await service.startBatch(inputPaths, outputDir, config, folderRoot, relativePaths);
         return { ok: true, job };
       } catch (error2) {
         return {
@@ -6592,6 +6827,37 @@ function registerArchivalHandlers() {
         return {
           ok: false,
           error: error2 instanceof Error ? error2.message : "Failed to estimate size"
+        };
+      }
+    }
+  );
+  ipcMain.handle(
+    "archival/get-batch-info",
+    async (_event, request) => {
+      const { inputPaths, outputDir } = request;
+      if (!inputPaths || inputPaths.length === 0) {
+        return { ok: false, error: "No input files specified" };
+      }
+      if (!outputDir) {
+        return { ok: false, error: "No output directory specified" };
+      }
+      try {
+        const service = getService();
+        const diskCheck = await service.checkDiskSpace(outputDir, inputPaths);
+        const batchInfo = await service.getBatchInfo(inputPaths, outputDir);
+        return {
+          ok: true,
+          totalDurationSeconds: batchInfo.totalDurationSeconds,
+          totalInputBytes: batchInfo.totalInputBytes,
+          estimatedOutputBytes: diskCheck.requiredBytes,
+          availableBytes: diskCheck.availableBytes,
+          hasEnoughSpace: diskCheck.ok,
+          existingCount: batchInfo.existingCount
+        };
+      } catch (error2) {
+        return {
+          ok: false,
+          error: error2 instanceof Error ? error2.message : "Failed to get batch info"
         };
       }
     }
@@ -10387,10 +10653,10 @@ function createSymlink$1(srcpath, dstpath, type2, callback) {
   });
 }
 function _createSymlink(srcpath, dstpath, type2, callback) {
-  symlinkPaths(srcpath, dstpath, (err, relative) => {
+  symlinkPaths(srcpath, dstpath, (err, relative2) => {
     if (err) return callback(err);
-    srcpath = relative.toDst;
-    symlinkType(relative.toCwd, type2, (err2, type3) => {
+    srcpath = relative2.toDst;
+    symlinkType(relative2.toCwd, type2, (err2, type3) => {
       if (err2) return callback(err2);
       const dir = path$c.dirname(dstpath);
       pathExists$2(dir, (err3, dirExists) => {
@@ -10415,9 +10681,9 @@ function createSymlinkSync$1(srcpath, dstpath, type2) {
     const dstStat = fs$3.statSync(dstpath);
     if (areIdentical(srcStat, dstStat)) return;
   }
-  const relative = symlinkPathsSync(srcpath, dstpath);
-  srcpath = relative.toDst;
-  type2 = symlinkTypeSync(relative.toCwd, type2);
+  const relative2 = symlinkPathsSync(srcpath, dstpath);
+  srcpath = relative2.toDst;
+  type2 = symlinkTypeSync(relative2.toCwd, type2);
   const dir = path$c.dirname(dstpath);
   const exists = fs$3.existsSync(dir);
   if (exists) return fs$3.symlinkSync(srcpath, dstpath, type2);

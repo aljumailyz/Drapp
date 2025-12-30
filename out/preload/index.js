@@ -128,6 +128,7 @@ const api = {
   // Archival Processing API
   archivalSelectFiles: () => electron.ipcRenderer.invoke("archival/select-files"),
   archivalSelectOutputDir: () => electron.ipcRenderer.invoke("archival/select-output-dir"),
+  archivalSelectFolder: () => electron.ipcRenderer.invoke("archival/select-folder"),
   archivalGetDefaultConfig: () => electron.ipcRenderer.invoke("archival/get-default-config"),
   archivalStartBatch: (payload) => electron.ipcRenderer.invoke("archival/start-batch", payload),
   archivalGetStatus: () => electron.ipcRenderer.invoke("archival/get-status"),
@@ -135,6 +136,7 @@ const api = {
   archivalPreviewCommand: (payload) => electron.ipcRenderer.invoke("archival/preview-command", payload),
   archivalEstimateSize: (inputPath) => electron.ipcRenderer.invoke("archival/estimate-size", inputPath),
   archivalAnalyzeVideo: (inputPath) => electron.ipcRenderer.invoke("archival/analyze-video", inputPath),
+  archivalGetBatchInfo: (payload) => electron.ipcRenderer.invoke("archival/get-batch-info", payload),
   archivalDetectEncoders: () => electron.ipcRenderer.invoke("archival/detect-encoders"),
   archivalUpgradeFFmpeg: () => electron.ipcRenderer.invoke("archival/upgrade-ffmpeg"),
   onArchivalEvent: (listener) => {

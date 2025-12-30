@@ -1,4 +1,6 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { readdir } from 'node:fs/promises'
+import { join, extname, relative } from 'node:path'
 import {
   ArchivalService,
   detectAv1Encoders,
@@ -13,6 +15,61 @@ import type {
   VideoSourceInfo
 } from '../../shared/types/archival.types'
 import { DEFAULT_ARCHIVAL_CONFIG } from '../../shared/types/archival.types'
+
+// Supported video extensions for folder scanning
+const VIDEO_EXTENSIONS = new Set([
+  '.mp4', '.mkv', '.mov', '.webm', '.avi',
+  '.m4v', '.ts', '.mts', '.m2ts', '.flv', '.wmv'
+])
+
+// Directories to ignore during recursive scanning
+const IGNORED_DIRS = new Set(['.drapp', '.git', 'node_modules', '$RECYCLE.BIN', 'System Volume Information'])
+
+type VideoFileInfo = {
+  absolutePath: string
+  relativePath: string
+}
+
+/**
+ * Recursively find all video files in a directory
+ */
+async function findVideoFilesRecursively(
+  rootPath: string,
+  basePath: string = rootPath
+): Promise<VideoFileInfo[]> {
+  const files: VideoFileInfo[] = []
+
+  async function walk(dir: string): Promise<void> {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true })
+
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name)
+
+        if (entry.isDirectory()) {
+          // Skip hidden and ignored directories
+          if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) {
+            continue
+          }
+          await walk(fullPath)
+        } else if (entry.isFile()) {
+          const ext = extname(entry.name).toLowerCase()
+          if (VIDEO_EXTENSIONS.has(ext)) {
+            files.push({
+              absolutePath: fullPath,
+              relativePath: relative(basePath, fullPath)
+            })
+          }
+        }
+      }
+    } catch {
+      // Skip directories we can't read (permission issues, etc.)
+    }
+  }
+
+  await walk(rootPath)
+  return files
+}
 
 let archivalService: ArchivalService | null = null
 
@@ -82,6 +139,51 @@ export function registerArchivalHandlers(): void {
     }
 
     return { ok: true, path: result.filePaths[0] }
+  })
+
+  /**
+   * Select a folder and recursively find all video files
+   * Returns both absolute paths and relative paths for structure preservation
+   */
+  ipcMain.handle('archival/select-folder', async () => {
+    const focusedWindow = BrowserWindow.getFocusedWindow()
+    const dialogOptions: Electron.OpenDialogOptions = {
+      properties: ['openDirectory'],
+      title: 'Select Folder for Archival Processing'
+    }
+
+    const result = focusedWindow
+      ? await dialog.showOpenDialog(focusedWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true }
+    }
+
+    const folderPath = result.filePaths[0]
+
+    try {
+      const videoFiles = await findVideoFilesRecursively(folderPath)
+
+      if (videoFiles.length === 0) {
+        return { ok: false, error: 'No video files found in the selected folder' }
+      }
+
+      // Sort files by relative path for predictable order
+      videoFiles.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+
+      return {
+        ok: true,
+        folderPath,
+        paths: videoFiles.map(f => f.absolutePath),
+        fileInfo: videoFiles
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to scan folder'
+      }
+    }
   })
 
   /**
@@ -159,9 +261,11 @@ export function registerArchivalHandlers(): void {
         inputPaths: string[]
         outputDir: string
         config?: Partial<ArchivalEncodingConfig>
+        folderRoot?: string
+        relativePaths?: string[]
       }
     ): Promise<{ ok: boolean; job?: ArchivalBatchJob; error?: string }> => {
-      const { inputPaths, outputDir, config } = request
+      const { inputPaths, outputDir, config, folderRoot, relativePaths } = request
 
       if (!inputPaths || inputPaths.length === 0) {
         return { ok: false, error: 'No input files specified' }
@@ -173,7 +277,7 @@ export function registerArchivalHandlers(): void {
 
       try {
         const service = getService()
-        const job = await service.startBatch(inputPaths, outputDir, config)
+        const job = await service.startBatch(inputPaths, outputDir, config, folderRoot, relativePaths)
         return { ok: true, job }
       } catch (error) {
         return {
@@ -277,6 +381,65 @@ export function registerArchivalHandlers(): void {
         return {
           ok: false,
           error: error instanceof Error ? error.message : 'Failed to estimate size'
+        }
+      }
+    }
+  )
+
+  /**
+   * Get batch info: total duration, estimated size, and disk space check
+   * Used to display summary before starting encoding
+   */
+  ipcMain.handle(
+    'archival/get-batch-info',
+    async (
+      _event,
+      request: {
+        inputPaths: string[]
+        outputDir: string
+      }
+    ): Promise<{
+      ok: boolean
+      totalDurationSeconds?: number
+      totalInputBytes?: number
+      estimatedOutputBytes?: number
+      availableBytes?: number
+      hasEnoughSpace?: boolean
+      existingCount?: number
+      error?: string
+    }> => {
+      const { inputPaths, outputDir } = request
+
+      if (!inputPaths || inputPaths.length === 0) {
+        return { ok: false, error: 'No input files specified' }
+      }
+
+      if (!outputDir) {
+        return { ok: false, error: 'No output directory specified' }
+      }
+
+      try {
+        const service = getService()
+
+        // Check disk space
+        const diskCheck = await service.checkDiskSpace(outputDir, inputPaths)
+
+        // Get batch info (duration and existing files check)
+        const batchInfo = await service.getBatchInfo(inputPaths, outputDir)
+
+        return {
+          ok: true,
+          totalDurationSeconds: batchInfo.totalDurationSeconds,
+          totalInputBytes: batchInfo.totalInputBytes,
+          estimatedOutputBytes: diskCheck.requiredBytes,
+          availableBytes: diskCheck.availableBytes,
+          hasEnoughSpace: diskCheck.ok,
+          existingCount: batchInfo.existingCount
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Failed to get batch info'
         }
       }
     }

@@ -81,11 +81,10 @@ export function buildArchivalFFmpegArgs(
     args.push(...buildAudioArgs(config))
   }
 
-  // Copy all other streams (subtitles, attachments, etc.)
-  args.push('-c:s', 'copy')
-
-  // Map all streams from input
-  args.push('-map', '0')
+  // Map video and audio streams explicitly
+  // Don't try to copy subtitle streams from containers that may not support them (like MOV)
+  args.push('-map', '0:v:0') // First video stream
+  args.push('-map', '0:a?')  // All audio streams (optional - ? means don't fail if none)
 
   // Container-specific options
   if (config.container === 'mp4') {

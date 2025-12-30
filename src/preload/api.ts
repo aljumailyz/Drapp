@@ -590,6 +590,7 @@ export type ArchivalVideoSourceInfo = {
   colorSpace?: string
   hdrFormat?: string | null
   isHdr: boolean
+  bitrate?: number
 }
 
 export type ArchivalErrorType =
@@ -600,6 +601,7 @@ export type ArchivalErrorType =
   | 'corrupt_input'
   | 'encoder_error'
   | 'cancelled'
+  | 'output_larger'
   | 'unknown'
 
 export type ArchivalBatchItem = {
@@ -665,6 +667,7 @@ export type ArchivalEncodingConfigFull = {
   preserveStructure: boolean
   overwriteExisting: boolean
   deleteOriginal: boolean
+  deleteOutputIfLarger: boolean
 }
 
 export type ArchivalProgressEvent = {
@@ -700,6 +703,15 @@ export type ArchivalSelectOutputDirResponse = {
   ok: boolean
   path?: string
   canceled?: boolean
+}
+
+export type ArchivalSelectFolderResponse = {
+  ok: boolean
+  folderPath?: string
+  paths?: string[]
+  fileInfo?: Array<{ absolutePath: string; relativePath: string }>
+  canceled?: boolean
+  error?: string
 }
 
 export type ArchivalStartBatchResponse = {
@@ -742,6 +754,17 @@ export type ArchivalAnalyzeVideoResponse = {
   effectiveCrf?: number
   isHdr?: boolean
   resolution?: string
+  error?: string
+}
+
+export type ArchivalBatchInfoResponse = {
+  ok: boolean
+  totalDurationSeconds?: number
+  totalInputBytes?: number
+  estimatedOutputBytes?: number
+  availableBytes?: number
+  hasEnoughSpace?: boolean
+  existingCount?: number
   error?: string
 }
 
@@ -919,11 +942,14 @@ export type Api = {
   // Archival Processing API
   archivalSelectFiles: () => Promise<ArchivalSelectFilesResponse>
   archivalSelectOutputDir: () => Promise<ArchivalSelectOutputDirResponse>
+  archivalSelectFolder: () => Promise<ArchivalSelectFolderResponse>
   archivalGetDefaultConfig: () => Promise<{ ok: boolean; config: Omit<ArchivalEncodingConfigFull, 'outputDir'> }>
   archivalStartBatch: (payload: {
     inputPaths: string[]
     outputDir: string
     config?: Partial<ArchivalEncodingConfigFull>
+    folderRoot?: string
+    relativePaths?: string[]
   }) => Promise<ArchivalStartBatchResponse>
   archivalGetStatus: () => Promise<ArchivalStatusResponse>
   archivalCancel: () => Promise<ArchivalCancelResponse>
@@ -934,6 +960,7 @@ export type Api = {
   }) => Promise<ArchivalPreviewCommandResponse>
   archivalEstimateSize: (inputPath: string) => Promise<ArchivalEstimateSizeResponse>
   archivalAnalyzeVideo: (inputPath: string) => Promise<ArchivalAnalyzeVideoResponse>
+  archivalGetBatchInfo: (payload: { inputPaths: string[]; outputDir: string }) => Promise<ArchivalBatchInfoResponse>
   archivalDetectEncoders: () => Promise<ArchivalDetectEncodersResponse>
   archivalUpgradeFFmpeg: () => Promise<ArchivalUpgradeFFmpegResponse>
   onArchivalEvent: (listener: (event: ArchivalProgressEvent) => void) => () => void
@@ -1096,6 +1123,8 @@ export const api: Api = {
     ipcRenderer.invoke('archival/select-files') as Promise<ArchivalSelectFilesResponse>,
   archivalSelectOutputDir: () =>
     ipcRenderer.invoke('archival/select-output-dir') as Promise<ArchivalSelectOutputDirResponse>,
+  archivalSelectFolder: () =>
+    ipcRenderer.invoke('archival/select-folder') as Promise<ArchivalSelectFolderResponse>,
   archivalGetDefaultConfig: () =>
     ipcRenderer.invoke('archival/get-default-config') as Promise<{ ok: boolean; config: Omit<ArchivalEncodingConfigFull, 'outputDir'> }>,
   archivalStartBatch: (payload) =>
@@ -1110,6 +1139,8 @@ export const api: Api = {
     ipcRenderer.invoke('archival/estimate-size', inputPath) as Promise<ArchivalEstimateSizeResponse>,
   archivalAnalyzeVideo: (inputPath) =>
     ipcRenderer.invoke('archival/analyze-video', inputPath) as Promise<ArchivalAnalyzeVideoResponse>,
+  archivalGetBatchInfo: (payload) =>
+    ipcRenderer.invoke('archival/get-batch-info', payload) as Promise<ArchivalBatchInfoResponse>,
   archivalDetectEncoders: () =>
     ipcRenderer.invoke('archival/detect-encoders') as Promise<ArchivalDetectEncodersResponse>,
   archivalUpgradeFFmpeg: () =>

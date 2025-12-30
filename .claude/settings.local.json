@@ -13,7 +13,9 @@
       "Bash(cmd /c \"echo %PATH%\")",
       "Bash(powershell:*)",
       "Bash(powershell.exe -NoProfile -Command \"Write-Host $env:PATH\")",
-      "Bash(\"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\\node_modules\\.bin\\tsc.cmd\" --noEmit --project \"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\")"
+      "Bash(\"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\\node_modules\\.bin\\tsc.cmd\" --noEmit --project \"C:\\Users\\zaidu\\OneDrive\\Desktop\\Developer\\Drapp\")",
+      "Bash(cat:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

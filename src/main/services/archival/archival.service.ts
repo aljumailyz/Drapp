@@ -215,7 +215,9 @@ export class ArchivalService {
   async startBatch(
     inputPaths: string[],
     outputDir: string,
-    configOverrides?: Partial<ArchivalEncodingConfig>
+    configOverrides?: Partial<ArchivalEncodingConfig>,
+    folderRoot?: string,
+    relativePaths?: string[]
   ): Promise<ArchivalBatchJob> {
     if (this.activeJob && this.activeJob.status === 'running') {
       throw new Error('Another archival job is already running')
@@ -270,10 +272,15 @@ export class ArchivalService {
 
     // Create batch job
     const batchId = randomUUID()
-    const items: ArchivalBatchItem[] = inputPaths.map((inputPath) => ({
+    const items: ArchivalBatchItem[] = inputPaths.map((inputPath, index) => ({
       id: randomUUID(),
       inputPath,
-      outputPath: this.buildOutputPath(inputPath, outputDir, config),
+      outputPath: this.buildOutputPath(
+        inputPath,
+        outputDir,
+        config,
+        relativePaths?.[index]
+      ),
       status: 'queued',
       progress: 0
     }))
@@ -381,6 +388,61 @@ export class ArchivalService {
       sourceInfo,
       effectiveCrf,
       ...estimate
+    }
+  }
+
+  /**
+   * Get batch info including total duration and existing files count
+   * Used for pre-flight checks before starting encoding
+   */
+  async getBatchInfo(
+    inputPaths: string[],
+    outputDir: string
+  ): Promise<{
+    totalDurationSeconds: number
+    totalInputBytes: number
+    existingCount: number
+  }> {
+    let totalDurationSeconds = 0
+    let totalInputBytes = 0
+    let existingCount = 0
+
+    // Check for all possible container formats
+    const containerExtensions = ['mkv', 'mp4', 'webm']
+
+    for (const inputPath of inputPaths) {
+      try {
+        // Get file size
+        const inputStat = await stat(inputPath)
+        totalInputBytes += inputStat.size
+
+        // Get duration via quick metadata probe
+        const meta = await this.metadata.extract({ filePath: inputPath })
+        if (meta.duration) {
+          totalDurationSeconds += meta.duration
+        }
+
+        // Check if output would already exist in any container format
+        const inputName = basename(inputPath, extname(inputPath))
+        for (const ext of containerExtensions) {
+          const outputPath = join(outputDir, `${inputName}.${ext}`)
+          try {
+            await access(outputPath)
+            existingCount++
+            break // Count each input file only once even if multiple outputs exist
+          } catch {
+            // Output doesn't exist with this extension
+          }
+        }
+      } catch {
+        // Skip files we can't read
+      }
+    }
+
+    return {
+      totalDurationSeconds,
+      totalInputBytes,
+      existingCount
     }
   }
 
@@ -493,6 +555,40 @@ export class ArchivalService {
       item.outputSize = outputStat.size
       item.compressionRatio = item.inputSize ? item.inputSize / item.outputSize : undefined
 
+      // Check if output is larger than input
+      const outputLarger = item.inputSize && item.outputSize > item.inputSize
+
+      if (outputLarger && this.activeJob.config.deleteOutputIfLarger) {
+        // Delete the larger output file
+        await this.cleanupPartialOutput(item.outputPath)
+
+        item.status = 'skipped'
+        item.error = `Output (${this.formatBytes(item.outputSize)}) larger than input (${this.formatBytes(item.inputSize!)})`
+        item.errorType = 'output_larger'
+        item.completedAt = new Date().toISOString()
+        this.activeJob.skippedItems++
+
+        this.emitEvent({
+          batchId: this.activeJob.id,
+          itemId: item.id,
+          kind: 'item_complete',
+          progress: 100,
+          status: 'skipped',
+          error: item.error,
+          errorType: 'output_larger',
+          outputSize: item.outputSize,
+          compressionRatio: item.compressionRatio
+        })
+
+        this.logger.info('Skipped - output larger than input', {
+          input: basename(item.inputPath),
+          inputSize: item.inputSize,
+          outputSize: item.outputSize
+        })
+
+        return
+      }
+
       // Update batch-level tracking
       if (this.activeJob) {
         this.activeJob.actualOutputBytes = (this.activeJob.actualOutputBytes ?? 0) + item.outputSize
@@ -507,6 +603,11 @@ export class ArchivalService {
       item.progress = 100
       this.activeJob.completedItems++
 
+      // Warn if output is larger but we kept it
+      const warningMsg = outputLarger
+        ? ` (WARNING: output larger than input)`
+        : ''
+
       this.emitEvent({
         batchId: this.activeJob.id,
         itemId: item.id,
@@ -517,10 +618,11 @@ export class ArchivalService {
         compressionRatio: item.compressionRatio
       })
 
-      this.logger.info('Completed archival encoding', {
+      this.logger.info(`Completed archival encoding${warningMsg}`, {
         input: basename(item.inputPath),
         output: basename(item.outputPath),
-        ratio: item.compressionRatio?.toFixed(2)
+        ratio: item.compressionRatio?.toFixed(2),
+        outputLarger
       })
 
     } catch (error) {
@@ -571,7 +673,8 @@ export class ArchivalService {
       bitDepth: extendedMeta.bitDepth,
       colorSpace: extendedMeta.colorSpace,
       hdrFormat: extendedMeta.hdrFormat,
-      isHdr
+      isHdr,
+      bitrate: meta.bitrate ?? undefined
     }
   }
 
@@ -880,8 +983,35 @@ export class ArchivalService {
           })
 
           // Extract meaningful error from stderr
-          const errorMatch = stderr.match(/Error[^\n]*|error[^\n]*|Invalid[^\n]*|No space[^\n]*/i)
-          const errorMsg = errorMatch ? errorMatch[0] : `FFmpeg exited with code ${code}`
+          // Look for common FFmpeg error patterns
+          const errorPatterns = [
+            /Error[^\n]*/i,
+            /error[^\n]*/i,
+            /Invalid[^\n]*/i,
+            /No space[^\n]*/i,
+            /Unknown encoder[^\n]*/i,
+            /Encoder .* not found[^\n]*/i,
+            /Option .* not found[^\n]*/i,
+            /Unrecognized option[^\n]*/i,
+            /Could not[^\n]*/i,
+            /Cannot[^\n]*/i
+          ]
+
+          let errorMsg = `FFmpeg exited with code ${code}`
+          for (const pattern of errorPatterns) {
+            const match = stderr.match(pattern)
+            if (match) {
+              errorMsg = match[0].trim()
+              break
+            }
+          }
+
+          // Include last few lines of stderr for more context
+          const stderrLines = stderr.trim().split('\n').filter(l => l.trim())
+          const lastLines = stderrLines.slice(-3).join(' | ')
+          if (lastLines && !errorMsg.includes(lastLines.slice(0, 50))) {
+            errorMsg = `${errorMsg} - ${lastLines.slice(0, 200)}`
+          }
 
           // Classify the error
           const errorType = classifyError(stderr || errorMsg)
@@ -931,6 +1061,16 @@ export class ArchivalService {
   }
 
   /**
+   * Format bytes to human-readable string
+   */
+  private formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }
+
+  /**
    * Parse time string (HH:MM:SS.mmm or HH:MM:SS) to milliseconds
    */
   private parseTimeToMs(timeStr: string): number | null {
@@ -964,10 +1104,19 @@ export class ArchivalService {
   private buildOutputPath(
     inputPath: string,
     outputDir: string,
-    config: ArchivalEncodingConfig
+    config: ArchivalEncodingConfig,
+    relativePath?: string
   ): string {
     const inputName = basename(inputPath, extname(inputPath))
     const extension = config.container
+
+    // Preserve folder structure when enabled and relative path is provided
+    if (config.preserveStructure && relativePath) {
+      const relativeDir = dirname(relativePath)
+      if (relativeDir && relativeDir !== '.') {
+        return join(outputDir, relativeDir, `${inputName}.${extension}`)
+      }
+    }
 
     // Simple flat output structure
     return join(outputDir, `${inputName}.${extension}`)
