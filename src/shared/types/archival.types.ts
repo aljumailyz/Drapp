@@ -18,6 +18,7 @@ export interface VideoSourceInfo {
   hdrFormat?: string | null // HDR10, HLG, DolbyVision, etc.
   isHdr: boolean
   bitrate?: number // Source bitrate in bits per second
+  audioCodec?: string // Source audio codec (aac, opus, vorbis, flac, etc.)
 }
 
 /**

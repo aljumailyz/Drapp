@@ -591,6 +591,7 @@ export type ArchivalVideoSourceInfo = {
   hdrFormat?: string | null
   isHdr: boolean
   bitrate?: number
+  audioCodec?: string
 }
 
 export type ArchivalErrorType =

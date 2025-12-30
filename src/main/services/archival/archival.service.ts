@@ -674,17 +674,19 @@ export class ArchivalService {
       colorSpace: extendedMeta.colorSpace,
       hdrFormat: extendedMeta.hdrFormat,
       isHdr,
-      bitrate: meta.bitrate ?? undefined
+      bitrate: meta.bitrate ?? undefined,
+      audioCodec: extendedMeta.audioCodec
     }
   }
 
   /**
-   * Get extended metadata including HDR info
+   * Get extended metadata including HDR info and audio codec
    */
   private async getExtendedMetadata(filePath: string): Promise<{
     bitDepth?: number
     colorSpace?: string
     hdrFormat?: string | null
+    audioCodec?: string
   }> {
     const ffprobePath = resolveBundledBinary('ffprobe')
 
@@ -693,7 +695,6 @@ export class ArchivalService {
         '-v', 'quiet',
         '-print_format', 'json',
         '-show_streams',
-        '-select_streams', 'v:0',
         filePath
       ])
 
@@ -704,6 +705,8 @@ export class ArchivalService {
         try {
           const parsed = JSON.parse(stdout) as {
             streams?: Array<{
+              codec_type?: string
+              codec_name?: string
               bits_per_raw_sample?: string
               color_space?: string
               color_primaries?: string
@@ -714,29 +717,32 @@ export class ArchivalService {
             }>
           }
 
-          const stream = parsed.streams?.[0]
-          if (!stream) {
-            resolve({})
+          // Find video and audio streams
+          const videoStream = parsed.streams?.find(s => s.codec_type === 'video')
+          const audioStream = parsed.streams?.find(s => s.codec_type === 'audio')
+
+          if (!videoStream) {
+            resolve({ audioCodec: audioStream?.codec_name })
             return
           }
 
           // Detect bit depth
-          const bitDepth = stream.bits_per_raw_sample
-            ? parseInt(stream.bits_per_raw_sample, 10)
+          const bitDepth = videoStream.bits_per_raw_sample
+            ? parseInt(videoStream.bits_per_raw_sample, 10)
             : undefined
 
           // Build color space string from components
           const colorParts = [
-            stream.color_primaries,
-            stream.color_transfer,
-            stream.color_space
+            videoStream.color_primaries,
+            videoStream.color_transfer,
+            videoStream.color_space
           ].filter(Boolean)
           const colorSpace = colorParts.length > 0 ? colorParts.join('/') : undefined
 
           // Check for HDR metadata in side data
           let hdrFormat: string | null = null
-          if (stream.side_data_list) {
-            for (const sideData of stream.side_data_list) {
+          if (videoStream.side_data_list) {
+            for (const sideData of videoStream.side_data_list) {
               if (sideData.side_data_type?.includes('HDR')) {
                 hdrFormat = sideData.side_data_type
                 break
@@ -749,8 +755,8 @@ export class ArchivalService {
           }
 
           // Infer HDR from transfer characteristics
-          if (!hdrFormat && stream.color_transfer) {
-            const transfer = stream.color_transfer.toLowerCase()
+          if (!hdrFormat && videoStream.color_transfer) {
+            const transfer = videoStream.color_transfer.toLowerCase()
             if (transfer.includes('smpte2084') || transfer.includes('pq')) {
               hdrFormat = 'HDR10'
             } else if (transfer.includes('arib-std-b67') || transfer.includes('hlg')) {
@@ -758,7 +764,10 @@ export class ArchivalService {
             }
           }
 
-          resolve({ bitDepth, colorSpace, hdrFormat })
+          // Get audio codec
+          const audioCodec = audioStream?.codec_name
+
+          resolve({ bitDepth, colorSpace, hdrFormat, audioCodec })
         } catch {
           resolve({})
         }

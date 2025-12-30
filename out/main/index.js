@@ -5351,7 +5351,12 @@ function buildArchivalFFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   } else {
     args.push("-pix_fmt", "yuv420p");
   }
-  if (config.audioCopy) {
+  const needsWebmAudioReencode = config.container === "webm" && config.audioCopy && !isWebmCompatibleAudio(sourceInfo.audioCodec);
+  if (needsWebmAudioReencode) {
+    args.push("-c:a", "libopus");
+    args.push("-b:a", `${config.audioBitrate ?? 128}k`);
+    args.push("-ar", "48000");
+  } else if (config.audioCopy) {
     args.push("-c:a", "copy");
   } else {
     args.push(...buildAudioArgs(config));
@@ -5467,6 +5472,11 @@ function parseColorSpace(colorSpace) {
   }
   return {};
 }
+function isWebmCompatibleAudio(audioCodec) {
+  if (!audioCodec) return false;
+  const codec = audioCodec.toLowerCase();
+  return codec === "opus" || codec === "vorbis";
+}
 function buildAudioArgs(config) {
   const args = [];
   switch (config.audioCodec) {
@@ -5507,7 +5517,18 @@ function describeArchivalSettings(config, sourceInfo) {
   if (encoder === "libsvtav1") {
     lines.push(`Film Grain: ${config.av1.filmGrainSynthesis > 0 ? `Level ${config.av1.filmGrainSynthesis}` : "Disabled"}`);
   }
-  lines.push(`Audio: ${config.audioCopy ? "Copy (lossless)" : config.audioCodec?.toUpperCase()}`);
+  let audioDesc;
+  if (config.audioCopy) {
+    const needsWebmReencode = config.container === "webm" && sourceInfo && !isWebmCompatibleAudio(sourceInfo.audioCodec);
+    if (needsWebmReencode) {
+      audioDesc = `Opus (re-encoded for WebM, source: ${sourceInfo.audioCodec || "unknown"})`;
+    } else {
+      audioDesc = "Copy (lossless)";
+    }
+  } else {
+    audioDesc = config.audioCodec?.toUpperCase() ?? "Copy";
+  }
+  lines.push(`Audio: ${audioDesc}`);
   lines.push(`Container: ${config.container.toUpperCase()}`);
   return lines.join("\n");
 }
@@ -6251,11 +6272,12 @@ class ArchivalService {
       colorSpace: extendedMeta.colorSpace,
       hdrFormat: extendedMeta.hdrFormat,
       isHdr,
-      bitrate: meta.bitrate ?? void 0
+      bitrate: meta.bitrate ?? void 0,
+      audioCodec: extendedMeta.audioCodec
     };
   }
   /**
-   * Get extended metadata including HDR info
+   * Get extended metadata including HDR info and audio codec
    */
   async getExtendedMetadata(filePath) {
     const ffprobePath = resolveBundledBinary("ffprobe");
@@ -6266,8 +6288,6 @@ class ArchivalService {
         "-print_format",
         "json",
         "-show_streams",
-        "-select_streams",
-        "v:0",
         filePath
       ]);
       let stdout = "";
@@ -6277,21 +6297,22 @@ class ArchivalService {
       proc.on("close", () => {
         try {
           const parsed = JSON.parse(stdout);
-          const stream = parsed.streams?.[0];
-          if (!stream) {
-            resolve({});
+          const videoStream = parsed.streams?.find((s) => s.codec_type === "video");
+          const audioStream = parsed.streams?.find((s) => s.codec_type === "audio");
+          if (!videoStream) {
+            resolve({ audioCodec: audioStream?.codec_name });
             return;
           }
-          const bitDepth = stream.bits_per_raw_sample ? parseInt(stream.bits_per_raw_sample, 10) : void 0;
+          const bitDepth = videoStream.bits_per_raw_sample ? parseInt(videoStream.bits_per_raw_sample, 10) : void 0;
           const colorParts = [
-            stream.color_primaries,
-            stream.color_transfer,
-            stream.color_space
+            videoStream.color_primaries,
+            videoStream.color_transfer,
+            videoStream.color_space
           ].filter(Boolean);
           const colorSpace = colorParts.length > 0 ? colorParts.join("/") : void 0;
           let hdrFormat = null;
-          if (stream.side_data_list) {
-            for (const sideData of stream.side_data_list) {
+          if (videoStream.side_data_list) {
+            for (const sideData of videoStream.side_data_list) {
               if (sideData.side_data_type?.includes("HDR")) {
                 hdrFormat = sideData.side_data_type;
                 break;
@@ -6302,15 +6323,16 @@ class ArchivalService {
               }
             }
           }
-          if (!hdrFormat && stream.color_transfer) {
-            const transfer = stream.color_transfer.toLowerCase();
+          if (!hdrFormat && videoStream.color_transfer) {
+            const transfer = videoStream.color_transfer.toLowerCase();
             if (transfer.includes("smpte2084") || transfer.includes("pq")) {
               hdrFormat = "HDR10";
             } else if (transfer.includes("arib-std-b67") || transfer.includes("hlg")) {
               hdrFormat = "HLG";
             }
           }
-          resolve({ bitDepth, colorSpace, hdrFormat });
+          const audioCodec = audioStream?.codec_name;
+          resolve({ bitDepth, colorSpace, hdrFormat, audioCodec });
         } catch {
           resolve({});
         }

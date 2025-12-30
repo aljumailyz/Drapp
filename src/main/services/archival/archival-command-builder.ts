@@ -75,7 +75,18 @@ export function buildArchivalFFmpegArgs(
   // No -vf scale filter needed
 
   // Audio handling
-  if (config.audioCopy) {
+  // WebM container only supports Opus and Vorbis audio codecs
+  // If audioCopy is enabled but source audio is incompatible with WebM, re-encode to Opus
+  const needsWebmAudioReencode = config.container === 'webm' &&
+    config.audioCopy &&
+    !isWebmCompatibleAudio(sourceInfo.audioCodec)
+
+  if (needsWebmAudioReencode) {
+    // Source audio is incompatible with WebM, re-encode to Opus
+    args.push('-c:a', 'libopus')
+    args.push('-b:a', `${config.audioBitrate ?? 128}k`)
+    args.push('-ar', '48000')
+  } else if (config.audioCopy) {
     args.push('-c:a', 'copy')
   } else {
     args.push(...buildAudioArgs(config))
@@ -316,6 +327,16 @@ function parseColorSpace(colorSpace: string): {
 }
 
 /**
+ * Check if an audio codec is compatible with WebM container
+ * WebM only supports Vorbis and Opus audio codecs
+ */
+function isWebmCompatibleAudio(audioCodec?: string): boolean {
+  if (!audioCodec) return false
+  const codec = audioCodec.toLowerCase()
+  return codec === 'opus' || codec === 'vorbis'
+}
+
+/**
  * Build audio encoding arguments when not copying
  */
 function buildAudioArgs(config: ArchivalEncodingConfig): string[] {
@@ -378,7 +399,22 @@ export function describeArchivalSettings(
     lines.push(`Film Grain: ${config.av1.filmGrainSynthesis > 0 ? `Level ${config.av1.filmGrainSynthesis}` : 'Disabled'}`)
   }
 
-  lines.push(`Audio: ${config.audioCopy ? 'Copy (lossless)' : config.audioCodec?.toUpperCase()}`)
+  // Determine audio handling description
+  let audioDesc: string
+  if (config.audioCopy) {
+    // Check if WebM would need re-encoding
+    const needsWebmReencode = config.container === 'webm' &&
+      sourceInfo &&
+      !isWebmCompatibleAudio(sourceInfo.audioCodec)
+    if (needsWebmReencode) {
+      audioDesc = `Opus (re-encoded for WebM, source: ${sourceInfo.audioCodec || 'unknown'})`
+    } else {
+      audioDesc = 'Copy (lossless)'
+    }
+  } else {
+    audioDesc = config.audioCodec?.toUpperCase() ?? 'Copy'
+  }
+  lines.push(`Audio: ${audioDesc}`)
   lines.push(`Container: ${config.container.toUpperCase()}`)
 
   return lines.join('\n')
