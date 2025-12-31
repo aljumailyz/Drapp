@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import { randomUUID, randomFillSync, createHash } from "node:crypto";
 import { spawn, execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
-import os$1, { platform as platform$1 } from "node:os";
+import os$1, { platform as platform$1, arch } from "node:os";
 import require$$1 from "fs";
 import require$$0 from "constants";
 import require$$0$1 from "stream";
@@ -4233,6 +4233,54 @@ function registerSettingsHandlers(deps = {}) {
     setSetting(db2, "whisper_model_path", selectedPath);
     return { ok: true, path: selectedPath };
   });
+  ipcMain.handle("settings/get-whisper-provider", async () => {
+    const provider = getSetting(db2, "whisper_provider") ?? "bundled";
+    const endpoint = getSetting(db2, "whisper_lmstudio_endpoint") ?? "http://localhost:1234/v1/audio/transcriptions";
+    return { ok: true, provider, endpoint };
+  });
+  ipcMain.handle("settings/set-whisper-provider", async (_event, payload) => {
+    if (!payload || !payload.provider) {
+      return { ok: false, error: "Invalid payload" };
+    }
+    setSetting(db2, "whisper_provider", payload.provider);
+    if (payload.endpoint) {
+      setSetting(db2, "whisper_lmstudio_endpoint", payload.endpoint);
+    }
+    return { ok: true };
+  });
+  ipcMain.handle("settings/get-whisper-gpu", async () => {
+    const currentPlatform = platform$1();
+    const currentArch = arch();
+    const isAppleSilicon = currentPlatform === "darwin" && currentArch === "arm64";
+    let gpuAvailable = false;
+    let gpuType = "none";
+    let reason;
+    if (isAppleSilicon) {
+      gpuAvailable = true;
+      gpuType = "metal";
+    } else if (currentPlatform === "darwin") {
+      reason = "GPU acceleration requires Apple Silicon (M1/M2/M3). Intel Macs use CPU only.";
+    } else if (currentPlatform === "win32" || currentPlatform === "linux") {
+      reason = "AMD/NVIDIA GPU acceleration is not supported by bundled Whisper. Use LM Studio provider for GPU-accelerated transcription.";
+    }
+    const storedValue = getSetting(db2, "whisper_gpu_enabled");
+    const enabled = storedValue !== null ? storedValue === "1" : gpuAvailable;
+    return {
+      ok: true,
+      settings: {
+        enabled: enabled && gpuAvailable,
+        // Only enabled if available
+        available: gpuAvailable,
+        platform: currentPlatform,
+        gpuType,
+        reason
+      }
+    };
+  });
+  ipcMain.handle("settings/set-whisper-gpu", async (_event, enabled) => {
+    setBooleanSetting(db2, "whisper_gpu_enabled", enabled);
+    return { ok: true };
+  });
   ipcMain.handle("settings/get-privacy", async () => {
     const pinHash = getSetting(db2, PRIVACY_PIN_KEY);
     return {
@@ -5131,6 +5179,89 @@ async function getVersion(path2, args) {
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : "unknown error";
 }
+class WhisperService {
+  constructor() {
+    this.logger = new Logger("WhisperService");
+  }
+  async transcribe(request) {
+    this.logger.info("transcription requested", { audio: request.audioPath });
+    const binaryPath = resolveBundledBinary("whisper");
+    const outputDir = request.outputDir ?? dirname(request.audioPath);
+    const baseName = parse$7(request.audioPath).name;
+    const outputPrefix = join(outputDir, baseName);
+    const outputPath = `${outputPrefix}.txt`;
+    try {
+      accessSync(binaryPath, constants$3.X_OK);
+    } catch {
+      throw new Error(`whisper not executable at ${binaryPath}`);
+    }
+    mkdirSync(outputDir, { recursive: true });
+    await new Promise((resolve, reject) => {
+      if (request.signal?.aborted) {
+        const error2 = new Error("canceled");
+        error2.name = "AbortError";
+        reject(error2);
+        return;
+      }
+      const args = ["-m", request.modelPath, "-f", request.audioPath, "-otxt", "-ovtt", "-of", outputPrefix];
+      if (request.language) {
+        args.push("-l", request.language);
+      }
+      if (request.useGpu === false) {
+        args.push("-ng");
+      }
+      const child = spawn(binaryPath, args, { stdio: "pipe" });
+      let stderr = "";
+      let settled = false;
+      const finalize = (error2) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (request.signal) {
+          request.signal.removeEventListener("abort", onAbort);
+        }
+        if (error2) {
+          reject(error2);
+        } else {
+          resolve();
+        }
+      };
+      const onAbort = () => {
+        child.kill();
+        const error2 = new Error("canceled");
+        error2.name = "AbortError";
+        finalize(error2);
+      };
+      if (request.signal) {
+        request.signal.addEventListener("abort", onAbort, { once: true });
+      }
+      child.stderr.on("data", (chunk) => {
+        const text = chunk.toString();
+        request.onLog?.(text);
+        stderr += text;
+        if (stderr.length > 8e3) {
+          stderr = stderr.slice(-8e3);
+        }
+      });
+      child.on("error", (error2) => {
+        finalize(error2);
+      });
+      child.on("close", (code) => {
+        if (code === 0) {
+          finalize();
+        } else {
+          finalize(new Error(stderr || `whisper exited with code ${code ?? "unknown"}`));
+        }
+      });
+    });
+    const transcript = readFileSync$1(outputPath, "utf-8");
+    return {
+      transcript,
+      outputPath
+    };
+  }
+}
 const ARCHIVAL_CRF_DEFAULTS = {
   hdr: {
     "4k": 29,
@@ -5257,8 +5388,12 @@ const DEFAULT_ARCHIVAL_CONFIG = {
   // Safety: never auto-delete originals
   deleteOutputIfLarger: true,
   // Smart: delete output if it's larger than original
-  extractThumbnail: false
+  extractThumbnail: false,
   // Disabled by default
+  extractCaptions: false,
+  // Disabled by default - uses Whisper for transcription
+  limitedResourceMode: false
+  // Use all available threads by default
 };
 ({
   // Recommended: Good balance of quality and speed
@@ -5387,6 +5522,9 @@ function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogF
   const effectiveCrf = options.crf !== 30 ? options.crf : getOptimalCrf(sourceInfo);
   const pass1 = [];
   pass1.push("-i", inputPath);
+  if (config.limitedResourceMode) {
+    pass1.push("-threads", "6");
+  }
   pass1.push("-c:v", encoder);
   pass1.push("-crf", effectiveCrf.toString());
   if (encoder === "libaom-av1") {
@@ -5406,6 +5544,9 @@ function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogF
   pass1.push(process.platform === "win32" ? "NUL" : "/dev/null");
   const pass2 = [];
   pass2.push("-i", inputPath);
+  if (config.limitedResourceMode) {
+    pass2.push("-threads", "6");
+  }
   pass2.push("-c:v", encoder);
   pass2.push("-crf", effectiveCrf.toString());
   if (encoder === "libaom-av1") {
@@ -5442,6 +5583,9 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   const options = config.h265;
   const pass1 = [];
   pass1.push("-i", inputPath);
+  if (config.limitedResourceMode) {
+    pass1.push("-threads", "6");
+  }
   pass1.push("-c:v", options.encoder);
   pass1.push("-crf", options.crf.toString());
   pass1.push("-preset", options.preset);
@@ -5463,6 +5607,9 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   pass1.push(process.platform === "win32" ? "NUL" : "/dev/null");
   const pass2 = [];
   pass2.push("-i", inputPath);
+  if (config.limitedResourceMode) {
+    pass2.push("-threads", "6");
+  }
   pass2.push("-c:v", options.encoder);
   pass2.push("-crf", options.crf.toString());
   pass2.push("-preset", options.preset);
@@ -5497,6 +5644,9 @@ function buildX265ParamsWithPass(options, sourceInfo, passNumber, statsFile) {
   const params = [];
   params.push(`pass=${passNumber}`);
   params.push(`stats=${statsFile}.log`);
+  const vbvMaxrate = estimateVbvMaxrate(sourceInfo.width, sourceInfo.height, sourceInfo.frameRate);
+  params.push(`vbv-maxrate=${vbvMaxrate}`);
+  params.push(`vbv-bufsize=${vbvMaxrate * 2}`);
   params.push(`keyint=${options.keyframeInterval}`);
   params.push(`min-keyint=${Math.min(options.keyframeInterval, 25)}`);
   params.push(`bframes=${options.bframes}`);
@@ -5516,9 +5666,32 @@ function buildX265ParamsWithPass(options, sourceInfo, passNumber, statsFile) {
   }
   return params.join(":");
 }
+function estimateVbvMaxrate(width, height, frameRate) {
+  const pixels = width * height;
+  const fps = frameRate || 30;
+  let baseBitrate;
+  if (pixels >= 3840 * 2160) {
+    baseBitrate = 4e4;
+  } else if (pixels >= 2560 * 1440) {
+    baseBitrate = 2e4;
+  } else if (pixels >= 1920 * 1080) {
+    baseBitrate = 12e3;
+  } else if (pixels >= 1280 * 720) {
+    baseBitrate = 8e3;
+  } else {
+    baseBitrate = 4e3;
+  }
+  if (fps > 30) {
+    baseBitrate = Math.round(baseBitrate * (fps / 30));
+  }
+  return baseBitrate;
+}
 function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   const args = [];
   args.push("-i", inputPath);
+  if (config.limitedResourceMode) {
+    args.push("-threads", "6");
+  }
   const encoder = config.av1.encoder;
   args.push("-c:v", encoder);
   const effectiveCrf = config.av1.crf !== 30 ? config.av1.crf : getOptimalCrf(sourceInfo);
@@ -5560,6 +5733,9 @@ function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
 function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   const args = [];
   args.push("-i", inputPath);
+  if (config.limitedResourceMode) {
+    args.push("-threads", "6");
+  }
   args.push("-c:v", config.h265.encoder);
   args.push("-crf", config.h265.crf.toString());
   args.push("-preset", config.h265.preset);
@@ -5948,13 +6124,13 @@ const FFMPEG_DOWNLOAD_URLS = {
 };
 async function upgradeFFmpeg(onProgress) {
   const platform2 = process.platform;
-  const arch = process.arch;
-  const key = `${platform2}-${arch}`;
+  const arch2 = process.arch;
+  const key = `${platform2}-${arch2}`;
   const downloadInfo = FFMPEG_DOWNLOAD_URLS[key];
   if (!downloadInfo) {
     return {
       success: false,
-      error: `No FFmpeg upgrade available for ${platform2}-${arch}`
+      error: `No FFmpeg upgrade available for ${platform2}-${arch2}`
     };
   }
   const binaryDir = getBundledBinaryDir();
@@ -6096,17 +6272,41 @@ async function findBinaryInDir(dir, binaryName) {
 }
 const execAsync = promisify(exec);
 class ArchivalService {
-  // Moving average window
   constructor(onEvent) {
     this.onEvent = onEvent;
     this.logger = new Logger("ArchivalService");
     this.metadata = new MetadataService();
+    this.whisperService = new WhisperService();
     this.activeJob = null;
     this.activeProcess = null;
     this.abortController = null;
     this.encodingStartTime = 0;
     this.speedSamples = [];
     this.maxSpeedSamples = 10;
+    this.whisperModelPathGetter = null;
+    this.whisperProviderGetter = null;
+    this.whisperGpuEnabledGetter = null;
+  }
+  /**
+   * Set the function to get the Whisper model path from settings
+   * This is called from the IPC handler to inject the settings getter
+   */
+  setWhisperModelPathGetter(getter) {
+    this.whisperModelPathGetter = getter;
+  }
+  /**
+   * Set the function to get the Whisper provider settings
+   * This is called from the IPC handler to inject the settings getter
+   */
+  setWhisperProviderGetter(getter) {
+    this.whisperProviderGetter = getter;
+  }
+  /**
+   * Set the function to get the Whisper GPU enabled setting
+   * GPU acceleration is only available on Apple Silicon (Metal)
+   */
+  setWhisperGpuEnabledGetter(getter) {
+    this.whisperGpuEnabledGetter = getter;
   }
   /**
    * Get available AV1 encoders
@@ -6514,6 +6714,20 @@ class ArchivalService {
           });
         }
       }
+      if (this.activeJob.config.extractCaptions) {
+        try {
+          const captionPath = await this.extractCaptions(
+            item.outputPath,
+            this.activeJob.config.captionLanguage
+          );
+          item.captionPath = captionPath;
+        } catch (captionError) {
+          this.logger.warn("Caption extraction failed, continuing without captions", {
+            input: item.inputPath,
+            error: captionError instanceof Error ? captionError.message : "Unknown error"
+          });
+        }
+      }
       item.status = "completed";
       item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
       item.progress = 100;
@@ -6527,7 +6741,8 @@ class ArchivalService {
         status: "completed",
         outputSize: item.outputSize,
         compressionRatio: item.compressionRatio,
-        thumbnailPath: item.thumbnailPath
+        thumbnailPath: item.thumbnailPath,
+        captionPath: item.captionPath
       });
       this.logger.info(`Completed archival encoding${warningMsg}`, {
         input: basename(item.inputPath),
@@ -7067,17 +7282,32 @@ class ArchivalService {
   }
   /**
    * Build output path for a video, handling duplicates
+   * Also handles the case where input and output would be the same file
    */
   buildOutputPath(inputPath, outputDir, config, relativePath) {
     const inputName = basename(inputPath, extname(inputPath));
     const extension = config.container;
+    let outputPath;
     if (config.preserveStructure && relativePath) {
       const relativeDir = dirname(relativePath);
       if (relativeDir && relativeDir !== ".") {
-        return join(outputDir, relativeDir, `${inputName}.${extension}`);
+        outputPath = join(outputDir, relativeDir, `${inputName}.${extension}`);
+      } else {
+        outputPath = join(outputDir, `${inputName}.${extension}`);
       }
+    } else {
+      outputPath = join(outputDir, `${inputName}.${extension}`);
     }
-    return join(outputDir, `${inputName}.${extension}`);
+    const normalizedInput = inputPath.toLowerCase().replace(/\\/g, "/");
+    const normalizedOutput = outputPath.toLowerCase().replace(/\\/g, "/");
+    if (normalizedInput === normalizedOutput) {
+      const codecSuffix = config.codec === "h265" ? ".hevc" : ".av1";
+      outputPath = join(
+        dirname(outputPath),
+        `${inputName}${codecSuffix}.${extension}`
+      );
+    }
+    return outputPath;
   }
   /**
    * Deduplicate output paths to handle files with same name from different folders
@@ -7171,6 +7401,176 @@ class ArchivalService {
     });
   }
   /**
+   * Extract captions from video using Whisper (bundled or LM Studio)
+   * Extracts audio, runs transcription, produces VTT subtitles
+   */
+  async extractCaptions(videoPath, language) {
+    if (this.abortController?.signal.aborted) {
+      throw new Error("Caption extraction cancelled");
+    }
+    const providerSettings = this.whisperProviderGetter?.() ?? { provider: "bundled", endpoint: "" };
+    const useLmStudio = providerSettings.provider === "lmstudio";
+    if (!useLmStudio) {
+      const modelPath = this.whisperModelPathGetter?.();
+      if (!modelPath) {
+        throw new Error("Whisper model not configured. Please select a model in Settings.");
+      }
+      try {
+        await access(modelPath);
+      } catch {
+        throw new Error(`Whisper model not found at: ${modelPath}`);
+      }
+    }
+    const ffmpegPath = resolveBundledBinary("ffmpeg");
+    const videoDir = dirname(videoPath);
+    const videoName = parse$7(videoPath).name;
+    const tempAudioName = `${videoName}_whisper_temp`;
+    const audioPath = join(videoDir, `${tempAudioName}.wav`);
+    const vttOutputPath = join(videoDir, `${tempAudioName}.vtt`);
+    const txtOutputPath = join(videoDir, `${tempAudioName}.txt`);
+    const finalVttPath = join(videoDir, `${videoName}.vtt`);
+    this.logger.info("Starting caption extraction", {
+      videoPath,
+      language,
+      provider: useLmStudio ? "lmstudio" : "bundled"
+    });
+    try {
+      await this.extractAudioForWhisper(videoPath, audioPath, ffmpegPath);
+      if (useLmStudio) {
+        await this.transcribeWithLmStudio(audioPath, finalVttPath, providerSettings.endpoint, language);
+        this.logger.info("Caption extraction completed (LM Studio)", { vttPath: finalVttPath });
+        return finalVttPath;
+      } else {
+        const modelPath = this.whisperModelPathGetter?.();
+        const useGpu = this.whisperGpuEnabledGetter?.() ?? true;
+        this.logger.info("Running Whisper transcription", { audioPath, modelPath, useGpu });
+        await this.whisperService.transcribe({
+          audioPath,
+          modelPath,
+          outputDir: videoDir,
+          language: language || void 0,
+          signal: this.abortController?.signal,
+          useGpu,
+          onLog: (chunk) => {
+            this.logger.debug("Whisper output", { chunk: chunk.trim() });
+          }
+        });
+        try {
+          await unlink(finalVttPath).catch(() => {
+          });
+          await rename$2(vttOutputPath, finalVttPath);
+        } catch (renameError) {
+          this.logger.warn("Failed to rename VTT file, using temp name", {
+            from: vttOutputPath,
+            to: finalVttPath,
+            error: renameError instanceof Error ? renameError.message : "Unknown"
+          });
+          this.logger.info("Caption extraction completed", { vttPath: vttOutputPath });
+          return vttOutputPath;
+        }
+        this.logger.info("Caption extraction completed", { vttPath: finalVttPath });
+        return finalVttPath;
+      }
+    } finally {
+      await unlink(audioPath).catch(() => {
+      });
+      await unlink(txtOutputPath).catch(() => {
+      });
+    }
+  }
+  /**
+   * Extract audio from video to WAV format for Whisper transcription
+   */
+  async extractAudioForWhisper(videoPath, audioPath, ffmpegPath) {
+    return new Promise((resolve, reject) => {
+      const args = [
+        "-i",
+        videoPath,
+        "-vn",
+        // No video
+        "-acodec",
+        "pcm_s16le",
+        // 16-bit PCM
+        "-ar",
+        "16000",
+        // 16kHz sample rate (required by Whisper)
+        "-ac",
+        "1",
+        // Mono
+        "-y",
+        // Overwrite
+        audioPath
+      ];
+      this.logger.debug("Extracting audio for transcription", { args: args.join(" ") });
+      const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+      const abortHandler = () => {
+        proc.kill();
+        void unlink(audioPath).catch(() => {
+        });
+      };
+      this.abortController?.signal.addEventListener("abort", abortHandler, { once: true });
+      proc.on("close", (code) => {
+        this.abortController?.signal.removeEventListener("abort", abortHandler);
+        if (this.abortController?.signal.aborted) {
+          void unlink(audioPath).catch(() => {
+          });
+          reject(new Error("Caption extraction cancelled"));
+          return;
+        }
+        if (code === 0) {
+          resolve();
+        } else {
+          void unlink(audioPath).catch(() => {
+          });
+          if (stderr.includes("does not contain any stream") || stderr.includes("Output file is empty")) {
+            reject(new Error("Video has no audio stream"));
+          } else {
+            reject(new Error(`Audio extraction failed with code ${code}`));
+          }
+        }
+      });
+      proc.on("error", (error2) => {
+        this.abortController?.signal.removeEventListener("abort", abortHandler);
+        void unlink(audioPath).catch(() => {
+        });
+        reject(error2);
+      });
+    });
+  }
+  /**
+   * Transcribe audio using LM Studio's OpenAI-compatible API
+   * Sends audio to the /v1/audio/transcriptions endpoint
+   */
+  async transcribeWithLmStudio(audioPath, outputVttPath, endpoint, language) {
+    const { readFile: readFile2, writeFile: writeFile2 } = await import("node:fs/promises");
+    this.logger.info("Transcribing with LM Studio", { endpoint, audioPath });
+    const audioData = await readFile2(audioPath);
+    const audioBlob = new Blob([audioData], { type: "audio/wav" });
+    const formData = new FormData();
+    formData.append("file", audioBlob, "audio.wav");
+    formData.append("model", "whisper-1");
+    formData.append("response_format", "vtt");
+    if (language) {
+      formData.append("language", language);
+    }
+    const response = await fetch(endpoint, {
+      method: "POST",
+      body: formData,
+      signal: this.abortController?.signal
+    });
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`LM Studio transcription failed: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+    const vttContent = await response.text();
+    await writeFile2(outputVttPath, vttContent, "utf-8");
+    this.logger.info("LM Studio transcription completed", { outputVttPath });
+  }
+  /**
    * Emit progress event
    */
   emitEvent(event) {
@@ -7233,6 +7633,21 @@ function emitArchivalEvent(event) {
 function getService() {
   if (!archivalService) {
     archivalService = new ArchivalService(emitArchivalEvent);
+    archivalService.setWhisperModelPathGetter(() => {
+      const db2 = getDatabase();
+      return getSetting(db2, "whisper_model_path");
+    });
+    archivalService.setWhisperProviderGetter(() => {
+      const db2 = getDatabase();
+      const provider = getSetting(db2, "whisper_provider") ?? "bundled";
+      const endpoint = getSetting(db2, "whisper_lmstudio_endpoint") ?? "http://localhost:1234/v1/audio/transcriptions";
+      return { provider, endpoint };
+    });
+    archivalService.setWhisperGpuEnabledGetter(() => {
+      const db2 = getDatabase();
+      const value = getSetting(db2, "whisper_gpu_enabled");
+      return value !== null ? value === "1" : true;
+    });
   }
   return archivalService;
 }
@@ -7674,86 +8089,6 @@ class YtDlpService {
       return mergeMatch[1].trim();
     }
     return null;
-  }
-}
-class WhisperService {
-  constructor() {
-    this.logger = new Logger("WhisperService");
-  }
-  async transcribe(request) {
-    this.logger.info("transcription requested", { audio: request.audioPath });
-    const binaryPath = resolveBundledBinary("whisper");
-    const outputDir = request.outputDir ?? dirname(request.audioPath);
-    const baseName = parse$7(request.audioPath).name;
-    const outputPrefix = join(outputDir, baseName);
-    const outputPath = `${outputPrefix}.txt`;
-    try {
-      accessSync(binaryPath, constants$3.X_OK);
-    } catch {
-      throw new Error(`whisper not executable at ${binaryPath}`);
-    }
-    mkdirSync(outputDir, { recursive: true });
-    await new Promise((resolve, reject) => {
-      if (request.signal?.aborted) {
-        const error2 = new Error("canceled");
-        error2.name = "AbortError";
-        reject(error2);
-        return;
-      }
-      const args = ["-m", request.modelPath, "-f", request.audioPath, "-otxt", "-ovtt", "-of", outputPrefix];
-      if (request.language) {
-        args.push("-l", request.language);
-      }
-      const child = spawn(binaryPath, args, { stdio: "pipe" });
-      let stderr = "";
-      let settled = false;
-      const finalize = (error2) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (request.signal) {
-          request.signal.removeEventListener("abort", onAbort);
-        }
-        if (error2) {
-          reject(error2);
-        } else {
-          resolve();
-        }
-      };
-      const onAbort = () => {
-        child.kill();
-        const error2 = new Error("canceled");
-        error2.name = "AbortError";
-        finalize(error2);
-      };
-      if (request.signal) {
-        request.signal.addEventListener("abort", onAbort, { once: true });
-      }
-      child.stderr.on("data", (chunk) => {
-        const text = chunk.toString();
-        request.onLog?.(text);
-        stderr += text;
-        if (stderr.length > 8e3) {
-          stderr = stderr.slice(-8e3);
-        }
-      });
-      child.on("error", (error2) => {
-        finalize(error2);
-      });
-      child.on("close", (code) => {
-        if (code === 0) {
-          finalize();
-        } else {
-          finalize(new Error(stderr || `whisper exited with code ${code ?? "unknown"}`));
-        }
-      });
-    });
-    const transcript = readFileSync$1(outputPath, "utf-8");
-    return {
-      transcript,
-      outputPath
-    };
   }
 }
 class TaxonomyService {
@@ -20191,8 +20526,8 @@ class Provider {
   }
   getChannelFilePrefix() {
     if (this.runtimeOptions.platform === "linux") {
-      const arch = process.env["TEST_UPDATER_ARCH"] || process.arch;
-      const archSuffix = arch === "x64" ? "" : `-${arch}`;
+      const arch2 = process.env["TEST_UPDATER_ARCH"] || process.arch;
+      const archSuffix = arch2 === "x64" ? "" : `-${arch2}`;
       return "-linux" + archSuffix;
     } else {
       return this.runtimeOptions.platform === "darwin" ? "-mac" : "";

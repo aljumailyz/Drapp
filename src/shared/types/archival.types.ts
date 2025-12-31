@@ -303,6 +303,13 @@ export interface ArchivalEncodingConfig {
   // Thumbnail extraction
   extractThumbnail: boolean // Extract a thumbnail from the encoded video
   thumbnailTimestamp?: number // Timestamp in seconds to extract thumbnail (default: 10% into video)
+
+  // Caption extraction
+  extractCaptions: boolean // Extract captions/subtitles using Whisper
+  captionLanguage?: string // Language code for transcription (e.g., 'en', 'es', 'auto')
+
+  // Resource management
+  limitedResourceMode: boolean // Limit to 6 threads for lower CPU usage
 }
 
 /**
@@ -358,7 +365,9 @@ export const DEFAULT_ARCHIVAL_CONFIG: Omit<ArchivalEncodingConfig, 'outputDir'> 
   overwriteExisting: false,
   deleteOriginal: false, // Safety: never auto-delete originals
   deleteOutputIfLarger: true, // Smart: delete output if it's larger than original
-  extractThumbnail: false // Disabled by default
+  extractThumbnail: false, // Disabled by default
+  extractCaptions: false, // Disabled by default - uses Whisper for transcription
+  limitedResourceMode: false // Use all available threads by default
 }
 
 /**
@@ -450,6 +459,8 @@ export interface ArchivalBatchItem {
   elapsedSeconds?: number // elapsed encoding time
   // Thumbnail
   thumbnailPath?: string // Path to extracted thumbnail
+  // Captions
+  captionPath?: string // Path to extracted captions (.vtt file)
 }
 
 /**
@@ -517,6 +528,8 @@ export interface ArchivalProgressEvent {
   totalItems?: number // total items in batch
   // Thumbnail
   thumbnailPath?: string // Path to extracted thumbnail
+  // Captions
+  captionPath?: string // Path to extracted captions (.vtt file)
 }
 
 /**

@@ -15,6 +15,8 @@ import type {
   VideoSourceInfo
 } from '../../shared/types/archival.types'
 import { DEFAULT_ARCHIVAL_CONFIG } from '../../shared/types/archival.types'
+import { getDatabase } from '../database'
+import { getSetting } from '../utils/settings'
 
 // Supported video extensions for folder scanning
 const VIDEO_EXTENSIONS = new Set([
@@ -88,6 +90,25 @@ function emitArchivalEvent(event: ArchivalProgressEvent): void {
 function getService(): ArchivalService {
   if (!archivalService) {
     archivalService = new ArchivalService(emitArchivalEvent)
+    // Set up whisper model path getter for caption extraction
+    archivalService.setWhisperModelPathGetter(() => {
+      const db = getDatabase()
+      return getSetting(db, 'whisper_model_path')
+    })
+    // Set up whisper provider getter for caption extraction
+    archivalService.setWhisperProviderGetter(() => {
+      const db = getDatabase()
+      const provider = getSetting(db, 'whisper_provider') ?? 'bundled'
+      const endpoint = getSetting(db, 'whisper_lmstudio_endpoint') ?? 'http://localhost:1234/v1/audio/transcriptions'
+      return { provider, endpoint }
+    })
+    // Set up whisper GPU settings getter
+    archivalService.setWhisperGpuEnabledGetter(() => {
+      const db = getDatabase()
+      const value = getSetting(db, 'whisper_gpu_enabled')
+      // Default to true (use GPU if available) when not explicitly set
+      return value !== null ? value === '1' : true
+    })
   }
   return archivalService
 }

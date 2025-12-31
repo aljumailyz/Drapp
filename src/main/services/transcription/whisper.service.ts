@@ -11,13 +11,22 @@ export type TranscriptionRequest = {
   language?: string
   signal?: AbortSignal
   onLog?: (chunk: string) => void
+  /**
+   * Enable GPU acceleration (Metal on Apple Silicon)
+   * When false, passes -ng flag to disable GPU
+   * Only effective on Apple Silicon Macs with Metal-compiled whisper binary
+   */
+  useGpu?: boolean
 }
 
 export class WhisperService {
   private readonly logger = new Logger('WhisperService')
 
   async transcribe(request: TranscriptionRequest): Promise<{ transcript: string; outputPath: string }> {
-    this.logger.info('transcription requested', { audio: request.audioPath })
+    this.logger.info('transcription requested', {
+      audio: request.audioPath,
+      useGpu: request.useGpu ?? 'default'
+    })
     const binaryPath = resolveBundledBinary('whisper')
     const outputDir = request.outputDir ?? dirname(request.audioPath)
     const baseName = parse(request.audioPath).name
@@ -43,6 +52,10 @@ export class WhisperService {
       const args = ['-m', request.modelPath, '-f', request.audioPath, '-otxt', '-ovtt', '-of', outputPrefix]
       if (request.language) {
         args.push('-l', request.language)
+      }
+      // Disable GPU if explicitly set to false (default is to use GPU if available)
+      if (request.useGpu === false) {
+        args.push('-ng') // --no-gpu flag for whisper.cpp
       }
 
       const child = spawn(binaryPath, args, { stdio: 'pipe' })

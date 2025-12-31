@@ -108,6 +108,30 @@ export type WhisperModelResponse = {
   canceled?: boolean
   error?: string
 }
+
+export type WhisperProvider = 'bundled' | 'lmstudio'
+
+export type WhisperProviderResponse = {
+  ok: boolean
+  provider?: WhisperProvider
+  endpoint?: string
+  error?: string
+}
+
+export type WhisperGpuSettings = {
+  enabled: boolean
+  available: boolean
+  platform: 'darwin' | 'win32' | 'linux'
+  gpuType: 'metal' | 'none' // Metal for Apple Silicon, none for others
+  reason?: string // Why GPU is not available
+}
+
+export type WhisperGpuSettingsResponse = {
+  ok: boolean
+  settings?: WhisperGpuSettings
+  error?: string
+}
+
 export type LibraryListResponse = {
   ok: boolean
   videos: Array<{
@@ -626,6 +650,8 @@ export type ArchivalBatchItem = {
   elapsedSeconds?: number
   // Thumbnail
   thumbnailPath?: string
+  // Captions
+  captionPath?: string
 }
 
 export type ArchivalBatchJob = {
@@ -684,6 +710,9 @@ export type ArchivalEncodingConfigFull = {
   deleteOutputIfLarger: boolean
   extractThumbnail: boolean
   thumbnailTimestamp?: number
+  extractCaptions: boolean
+  captionLanguage?: string
+  limitedResourceMode: boolean
 }
 
 export type ArchivalProgressEvent = {
@@ -707,6 +736,8 @@ export type ArchivalProgressEvent = {
   batchProgress?: number
   processedItems?: number
   totalItems?: number
+  // Captions
+  captionPath?: string
 }
 
 export type ArchivalSelectFilesResponse = {
@@ -875,6 +906,10 @@ export type Api = {
   selectDownloadPath: () => Promise<DownloadPathResponse>
   getWhisperModel: () => Promise<WhisperModelResponse>
   selectWhisperModel: () => Promise<WhisperModelResponse>
+  getWhisperProvider: () => Promise<WhisperProviderResponse>
+  setWhisperProvider: (payload: { provider: WhisperProvider; endpoint?: string }) => Promise<{ ok: boolean; error?: string }>
+  getWhisperGpuSettings: () => Promise<WhisperGpuSettingsResponse>
+  setWhisperGpuEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
   libraryList: (includeHidden?: boolean) => Promise<LibraryListResponse>
   librarySelectFolder: () => Promise<LibrarySelectResponse>
   libraryScan: (path: string) => Promise<LibraryScanResponse>
@@ -1024,6 +1059,10 @@ export const api: Api = {
   selectDownloadPath: () => ipcRenderer.invoke('settings/select-download-path') as Promise<DownloadPathResponse>,
   getWhisperModel: () => ipcRenderer.invoke('settings/get-whisper-model') as Promise<WhisperModelResponse>,
   selectWhisperModel: () => ipcRenderer.invoke('settings/select-whisper-model') as Promise<WhisperModelResponse>,
+  getWhisperProvider: () => ipcRenderer.invoke('settings/get-whisper-provider') as Promise<WhisperProviderResponse>,
+  setWhisperProvider: (payload) => ipcRenderer.invoke('settings/set-whisper-provider', payload) as Promise<{ ok: boolean; error?: string }>,
+  getWhisperGpuSettings: () => ipcRenderer.invoke('settings/get-whisper-gpu') as Promise<WhisperGpuSettingsResponse>,
+  setWhisperGpuEnabled: (enabled) => ipcRenderer.invoke('settings/set-whisper-gpu', enabled) as Promise<{ ok: boolean; error?: string }>,
   libraryList: (includeHidden) => ipcRenderer.invoke('library/list', includeHidden) as Promise<LibraryListResponse>,
   librarySelectFolder: () => ipcRenderer.invoke('library/select-folder') as Promise<LibrarySelectResponse>,
   libraryScan: (path: string) => ipcRenderer.invoke('library/scan', path) as Promise<LibraryScanResponse>,

@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, rm, stat, unlink } from 'node:fs/promises'
-import { basename, dirname, extname, join } from 'node:path'
+import { access, mkdir, rename, rm, stat, unlink } from 'node:fs/promises'
+import { basename, dirname, extname, join, parse } from 'node:path'
 import { Logger } from '../../utils/logger'
 import { resolveBundledBinary } from '../../utils/binary'
 import { MetadataService, type MetadataResult } from '../library/metadata.service'
+import { WhisperService } from '../transcription/whisper.service'
 import {
   buildArchivalFFmpegArgs,
   buildTwoPassArgs,
@@ -50,6 +51,7 @@ export type ArchivalEventHandler = (event: ArchivalProgressEvent) => void
 export class ArchivalService {
   private readonly logger = new Logger('ArchivalService')
   private readonly metadata = new MetadataService()
+  private readonly whisperService = new WhisperService()
   private activeJob: ArchivalBatchJob | null = null
   private activeProcess: ChildProcess | null = null
   private abortController: AbortController | null = null
@@ -59,7 +61,38 @@ export class ArchivalService {
   private speedSamples: number[] = []
   private readonly maxSpeedSamples = 10 // Moving average window
 
+  // Whisper model path getter (injected from outside)
+  private whisperModelPathGetter: (() => string | null) | null = null
+  // Whisper provider settings getter
+  private whisperProviderGetter: (() => { provider: string; endpoint: string }) | null = null
+  // Whisper GPU settings getter
+  private whisperGpuEnabledGetter: (() => boolean) | null = null
+
   constructor(private readonly onEvent?: ArchivalEventHandler) {}
+
+  /**
+   * Set the function to get the Whisper model path from settings
+   * This is called from the IPC handler to inject the settings getter
+   */
+  setWhisperModelPathGetter(getter: () => string | null): void {
+    this.whisperModelPathGetter = getter
+  }
+
+  /**
+   * Set the function to get the Whisper provider settings
+   * This is called from the IPC handler to inject the settings getter
+   */
+  setWhisperProviderGetter(getter: () => { provider: string; endpoint: string }): void {
+    this.whisperProviderGetter = getter
+  }
+
+  /**
+   * Set the function to get the Whisper GPU enabled setting
+   * GPU acceleration is only available on Apple Silicon (Metal)
+   */
+  setWhisperGpuEnabledGetter(getter: () => boolean): void {
+    this.whisperGpuEnabledGetter = getter
+  }
 
   /**
    * Get available AV1 encoders
@@ -618,6 +651,23 @@ export class ArchivalService {
         }
       }
 
+      // Extract captions if enabled
+      if (this.activeJob.config.extractCaptions) {
+        try {
+          const captionPath = await this.extractCaptions(
+            item.outputPath,
+            this.activeJob.config.captionLanguage
+          )
+          item.captionPath = captionPath
+        } catch (captionError) {
+          // Log but don't fail the item if caption extraction fails
+          this.logger.warn('Caption extraction failed, continuing without captions', {
+            input: item.inputPath,
+            error: captionError instanceof Error ? captionError.message : 'Unknown error'
+          })
+        }
+      }
+
       item.status = 'completed'
       item.completedAt = new Date().toISOString()
       item.progress = 100
@@ -636,7 +686,8 @@ export class ArchivalService {
         status: 'completed',
         outputSize: item.outputSize,
         compressionRatio: item.compressionRatio,
-        thumbnailPath: item.thumbnailPath
+        thumbnailPath: item.thumbnailPath,
+        captionPath: item.captionPath
       })
 
       this.logger.info(`Completed archival encoding${warningMsg}`, {
@@ -1372,6 +1423,7 @@ export class ArchivalService {
 
   /**
    * Build output path for a video, handling duplicates
+   * Also handles the case where input and output would be the same file
    */
   private buildOutputPath(
     inputPath: string,
@@ -1382,16 +1434,36 @@ export class ArchivalService {
     const inputName = basename(inputPath, extname(inputPath))
     const extension = config.container
 
+    let outputPath: string
+
     // Preserve folder structure when enabled and relative path is provided
     if (config.preserveStructure && relativePath) {
       const relativeDir = dirname(relativePath)
       if (relativeDir && relativeDir !== '.') {
-        return join(outputDir, relativeDir, `${inputName}.${extension}`)
+        outputPath = join(outputDir, relativeDir, `${inputName}.${extension}`)
+      } else {
+        outputPath = join(outputDir, `${inputName}.${extension}`)
       }
+    } else {
+      // Simple flat output structure
+      outputPath = join(outputDir, `${inputName}.${extension}`)
     }
 
-    // Simple flat output structure
-    return join(outputDir, `${inputName}.${extension}`)
+    // Check if output would be the same as input (FFmpeg can't edit in-place)
+    // Normalize paths for comparison (handle case sensitivity on Windows)
+    const normalizedInput = inputPath.toLowerCase().replace(/\\/g, '/')
+    const normalizedOutput = outputPath.toLowerCase().replace(/\\/g, '/')
+
+    if (normalizedInput === normalizedOutput) {
+      // Add codec suffix to differentiate output from input
+      const codecSuffix = config.codec === 'h265' ? '.hevc' : '.av1'
+      outputPath = join(
+        dirname(outputPath),
+        `${inputName}${codecSuffix}.${extension}`
+      )
+    }
+
+    return outputPath
   }
 
   /**
@@ -1510,6 +1582,226 @@ export class ArchivalService {
         reject(error)
       })
     })
+  }
+
+  /**
+   * Extract captions from video using Whisper (bundled or LM Studio)
+   * Extracts audio, runs transcription, produces VTT subtitles
+   */
+  private async extractCaptions(
+    videoPath: string,
+    language?: string
+  ): Promise<string> {
+    // Check if cancelled before starting
+    if (this.abortController?.signal.aborted) {
+      throw new Error('Caption extraction cancelled')
+    }
+
+    // Get provider settings
+    const providerSettings = this.whisperProviderGetter?.() ?? { provider: 'bundled', endpoint: '' }
+    const useLmStudio = providerSettings.provider === 'lmstudio'
+
+    // For bundled provider, verify model exists
+    if (!useLmStudio) {
+      const modelPath = this.whisperModelPathGetter?.()
+      if (!modelPath) {
+        throw new Error('Whisper model not configured. Please select a model in Settings.')
+      }
+      try {
+        await access(modelPath)
+      } catch {
+        throw new Error(`Whisper model not found at: ${modelPath}`)
+      }
+    }
+
+    const ffmpegPath = resolveBundledBinary('ffmpeg')
+
+    // Build paths
+    const videoDir = dirname(videoPath)
+    const videoName = parse(videoPath).name
+    // Use a unique temp name for audio to avoid conflicts
+    const tempAudioName = `${videoName}_whisper_temp`
+    const audioPath = join(videoDir, `${tempAudioName}.wav`)
+    // WhisperService outputs files based on audio file basename, so VTT will be at:
+    const vttOutputPath = join(videoDir, `${tempAudioName}.vtt`)
+    const txtOutputPath = join(videoDir, `${tempAudioName}.txt`)
+    // Final VTT path (renamed to match video name)
+    const finalVttPath = join(videoDir, `${videoName}.vtt`)
+
+    this.logger.info('Starting caption extraction', {
+      videoPath,
+      language,
+      provider: useLmStudio ? 'lmstudio' : 'bundled'
+    })
+
+    try {
+      // Step 1: Extract audio to WAV format for Whisper
+      await this.extractAudioForWhisper(videoPath, audioPath, ffmpegPath)
+
+      // Step 2: Run transcription based on provider
+      if (useLmStudio) {
+        await this.transcribeWithLmStudio(audioPath, finalVttPath, providerSettings.endpoint, language)
+        // LM Studio writes directly to final path, no rename needed
+        this.logger.info('Caption extraction completed (LM Studio)', { vttPath: finalVttPath })
+        return finalVttPath
+      } else {
+        // Use bundled whisper
+        const modelPath = this.whisperModelPathGetter?.()!
+        const useGpu = this.whisperGpuEnabledGetter?.() ?? true // Default to GPU if available
+        this.logger.info('Running Whisper transcription', { audioPath, modelPath, useGpu })
+
+        await this.whisperService.transcribe({
+          audioPath,
+          modelPath,
+          outputDir: videoDir,
+          language: language || undefined,
+          signal: this.abortController?.signal,
+          useGpu,
+          onLog: (chunk) => {
+            this.logger.debug('Whisper output', { chunk: chunk.trim() })
+          }
+        })
+
+        // Step 3: Rename VTT file to match video name
+        try {
+          // Check if final path already exists and remove it
+          await unlink(finalVttPath).catch(() => {})
+          // Rename temp VTT to final name
+          await rename(vttOutputPath, finalVttPath)
+        } catch (renameError) {
+          // If rename fails, the temp VTT is still usable
+          this.logger.warn('Failed to rename VTT file, using temp name', {
+            from: vttOutputPath,
+            to: finalVttPath,
+            error: renameError instanceof Error ? renameError.message : 'Unknown'
+          })
+          // Return the temp path if rename failed
+          this.logger.info('Caption extraction completed', { vttPath: vttOutputPath })
+          return vttOutputPath
+        }
+
+        this.logger.info('Caption extraction completed', { vttPath: finalVttPath })
+        return finalVttPath
+      }
+    } finally {
+      // Clean up temporary files
+      await unlink(audioPath).catch(() => {})
+      await unlink(txtOutputPath).catch(() => {}) // Clean up .txt file too (bundled whisper)
+      // Don't clean up vttOutputPath here - it's either renamed or returned
+    }
+  }
+
+  /**
+   * Extract audio from video to WAV format for Whisper transcription
+   */
+  private async extractAudioForWhisper(
+    videoPath: string,
+    audioPath: string,
+    ffmpegPath: string
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const args = [
+        '-i', videoPath,
+        '-vn', // No video
+        '-acodec', 'pcm_s16le', // 16-bit PCM
+        '-ar', '16000', // 16kHz sample rate (required by Whisper)
+        '-ac', '1', // Mono
+        '-y', // Overwrite
+        audioPath
+      ]
+
+      this.logger.debug('Extracting audio for transcription', { args: args.join(' ') })
+
+      const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+
+      let stderr = ''
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString()
+      })
+
+      // Handle cancellation during audio extraction
+      const abortHandler = (): void => {
+        proc.kill()
+        void unlink(audioPath).catch(() => {})
+      }
+      this.abortController?.signal.addEventListener('abort', abortHandler, { once: true })
+
+      proc.on('close', (code) => {
+        this.abortController?.signal.removeEventListener('abort', abortHandler)
+
+        if (this.abortController?.signal.aborted) {
+          void unlink(audioPath).catch(() => {})
+          reject(new Error('Caption extraction cancelled'))
+          return
+        }
+
+        if (code === 0) {
+          resolve()
+        } else {
+          void unlink(audioPath).catch(() => {})
+          // Check for no audio stream
+          if (stderr.includes('does not contain any stream') || stderr.includes('Output file is empty')) {
+            reject(new Error('Video has no audio stream'))
+          } else {
+            reject(new Error(`Audio extraction failed with code ${code}`))
+          }
+        }
+      })
+
+      proc.on('error', (error) => {
+        this.abortController?.signal.removeEventListener('abort', abortHandler)
+        void unlink(audioPath).catch(() => {})
+        reject(error)
+      })
+    })
+  }
+
+  /**
+   * Transcribe audio using LM Studio's OpenAI-compatible API
+   * Sends audio to the /v1/audio/transcriptions endpoint
+   */
+  private async transcribeWithLmStudio(
+    audioPath: string,
+    outputVttPath: string,
+    endpoint: string,
+    language?: string
+  ): Promise<void> {
+    const { readFile, writeFile } = await import('node:fs/promises')
+
+    this.logger.info('Transcribing with LM Studio', { endpoint, audioPath })
+
+    // Read the audio file
+    const audioData = await readFile(audioPath)
+    const audioBlob = new Blob([audioData], { type: 'audio/wav' })
+
+    // Create form data for the OpenAI-compatible API
+    const formData = new FormData()
+    formData.append('file', audioBlob, 'audio.wav')
+    formData.append('model', 'whisper-1') // LM Studio ignores this, uses loaded model
+    formData.append('response_format', 'vtt') // Request VTT format directly
+    if (language) {
+      formData.append('language', language)
+    }
+
+    // Make the request with abort signal support
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      body: formData,
+      signal: this.abortController?.signal
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error')
+      throw new Error(`LM Studio transcription failed: ${response.status} ${response.statusText} - ${errorText}`)
+    }
+
+    // Get the VTT content
+    const vttContent = await response.text()
+
+    // Write VTT file
+    await writeFile(outputVttPath, vttContent, 'utf-8')
+
+    this.logger.info('LM Studio transcription completed', { outputVttPath })
   }
 
   /**

@@ -120,6 +120,14 @@ export default function Archive(): JSX.Element {
     existingCount?: number
   } | null>(null)
   const [isLoadingBatchInfo, setIsLoadingBatchInfo] = useState(false)
+  // Whisper provider settings for caption extraction
+  const [whisperProvider, setWhisperProvider] = useState<'bundled' | 'lmstudio'>('bundled')
+  const [lmstudioEndpoint, setLmstudioEndpoint] = useState('http://localhost:1234/v1/audio/transcriptions')
+  // Whisper GPU acceleration settings
+  const [whisperGpuEnabled, setWhisperGpuEnabled] = useState(false)
+  const [whisperGpuAvailable, setWhisperGpuAvailable] = useState(false)
+  const [whisperGpuType, setWhisperGpuType] = useState<'metal' | 'none'>('none')
+  const [whisperGpuReason, setWhisperGpuReason] = useState<string | undefined>()
 
   // Load default config and encoder info on mount
   useEffect(() => {
@@ -128,9 +136,27 @@ export default function Archive(): JSX.Element {
     Promise.all([
       window.api.archivalGetDefaultConfig(),
       window.api.archivalDetectEncoders(),
-      window.api.archivalGetStatus()
-    ]).then(([configResult, encoderResult, statusResult]) => {
+      window.api.archivalGetStatus(),
+      window.api.getWhisperProvider(),
+      window.api.getWhisperGpuSettings()
+    ]).then(([configResult, encoderResult, statusResult, whisperResult, gpuResult]) => {
       if (!active) return
+      // Load whisper provider settings
+      if (whisperResult.ok) {
+        if (whisperResult.provider) {
+          setWhisperProvider(whisperResult.provider)
+        }
+        if (whisperResult.endpoint) {
+          setLmstudioEndpoint(whisperResult.endpoint)
+        }
+      }
+      // Load whisper GPU settings
+      if (gpuResult.ok && gpuResult.settings) {
+        setWhisperGpuEnabled(gpuResult.settings.enabled)
+        setWhisperGpuAvailable(gpuResult.settings.available)
+        setWhisperGpuType(gpuResult.settings.gpuType)
+        setWhisperGpuReason(gpuResult.settings.reason)
+      }
       if (configResult.ok) {
         setDefaultConfig(configResult.config)
         let initialConfig = { ...configResult.config }
@@ -1183,6 +1209,100 @@ export default function Archive(): JSX.Element {
                   <p className="text-xs text-slate-400">Save a JPEG thumbnail alongside each encoded video</p>
                 </div>
               </label>
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.extractCaptions ?? false}
+                  onChange={(e) => handleConfigChange('extractCaptions', e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                <div className="text-sm text-slate-600">
+                  <span>Extract captions</span>
+                  <p className="text-xs text-slate-400">Generate subtitles using Whisper</p>
+                </div>
+              </label>
+              {/* Whisper provider settings - shown when extractCaptions is enabled */}
+              {config.extractCaptions && (
+                <div className="ml-7 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="text-xs font-medium text-slate-500">Transcription Provider</div>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="whisperProvider"
+                        value="bundled"
+                        checked={whisperProvider === 'bundled'}
+                        onChange={() => {
+                          setWhisperProvider('bundled')
+                          void window.api.setWhisperProvider({ provider: 'bundled' })
+                        }}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="text-sm text-slate-600">Bundled Whisper</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="whisperProvider"
+                        value="lmstudio"
+                        checked={whisperProvider === 'lmstudio'}
+                        onChange={() => {
+                          setWhisperProvider('lmstudio')
+                          void window.api.setWhisperProvider({ provider: 'lmstudio', endpoint: lmstudioEndpoint })
+                        }}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="text-sm text-slate-600">LM Studio</span>
+                    </label>
+                  </div>
+                  {whisperProvider === 'lmstudio' && (
+                    <div className="space-y-1">
+                      <label className="text-xs text-slate-500">API Endpoint</label>
+                      <input
+                        type="text"
+                        value={lmstudioEndpoint}
+                        onChange={(e) => {
+                          setLmstudioEndpoint(e.target.value)
+                          void window.api.setWhisperProvider({ provider: 'lmstudio', endpoint: e.target.value })
+                        }}
+                        placeholder="http://localhost:1234/v1/audio/transcriptions"
+                        className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 placeholder-slate-400"
+                      />
+                      <p className="text-xs text-slate-400">OpenAI-compatible transcription endpoint</p>
+                    </div>
+                  )}
+                  {whisperProvider === 'bundled' && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-slate-400">Requires whisper model configured in Settings → Processing</p>
+                      {/* GPU Acceleration toggle */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="whisper-gpu"
+                            checked={whisperGpuEnabled}
+                            disabled={!whisperGpuAvailable}
+                            onChange={(e) => {
+                              setWhisperGpuEnabled(e.target.checked)
+                              void window.api.setWhisperGpuEnabled(e.target.checked)
+                            }}
+                            className="h-3.5 w-3.5 rounded border-slate-300 disabled:opacity-50"
+                          />
+                          <label htmlFor="whisper-gpu" className={`text-xs ${whisperGpuAvailable ? 'text-slate-600' : 'text-slate-400'}`}>
+                            GPU Acceleration {whisperGpuType === 'metal' ? '(Metal)' : ''}
+                          </label>
+                        </div>
+                        {whisperGpuAvailable && whisperGpuEnabled && (
+                          <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-700">Enabled</span>
+                        )}
+                      </div>
+                      {!whisperGpuAvailable && whisperGpuReason && (
+                        <p className="text-xs text-amber-600">{whisperGpuReason}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <label className="flex items-center gap-3 text-rose-600">
                 <input
                   type="checkbox"
@@ -1191,6 +1311,18 @@ export default function Archive(): JSX.Element {
                   className="h-4 w-4 rounded border-rose-300"
                 />
                 <span className="text-sm">Delete original after encoding</span>
+              </label>
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.limitedResourceMode ?? false}
+                  onChange={(e) => handleConfigChange('limitedResourceMode', e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                <div className="text-sm text-slate-600">
+                  <span>Limited resource mode</span>
+                  <p className="text-xs text-slate-400">Use only 6 threads for lower CPU usage</p>
+                </div>
               </label>
             </div>
           </div>

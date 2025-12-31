@@ -105,6 +105,12 @@ function buildAv1TwoPassArgs(
   // ===== PASS 1 =====
   const pass1: string[] = []
   pass1.push('-i', inputPath)
+
+  // Limit threads in limited resource mode
+  if (config.limitedResourceMode) {
+    pass1.push('-threads', '6')
+  }
+
   pass1.push('-c:v', encoder)
   pass1.push('-crf', effectiveCrf.toString())
 
@@ -133,6 +139,12 @@ function buildAv1TwoPassArgs(
   // ===== PASS 2 =====
   const pass2: string[] = []
   pass2.push('-i', inputPath)
+
+  // Limit threads in limited resource mode
+  if (config.limitedResourceMode) {
+    pass2.push('-threads', '6')
+  }
+
   pass2.push('-c:v', encoder)
   pass2.push('-crf', effectiveCrf.toString())
 
@@ -195,6 +207,12 @@ function buildH265TwoPassArgs(
   // ===== PASS 1 =====
   const pass1: string[] = []
   pass1.push('-i', inputPath)
+
+  // Limit threads in limited resource mode
+  if (config.limitedResourceMode) {
+    pass1.push('-threads', '6')
+  }
+
   pass1.push('-c:v', options.encoder)
   pass1.push('-crf', options.crf.toString())
   pass1.push('-preset', options.preset)
@@ -227,6 +245,12 @@ function buildH265TwoPassArgs(
   // ===== PASS 2 =====
   const pass2: string[] = []
   pass2.push('-i', inputPath)
+
+  // Limit threads in limited resource mode
+  if (config.limitedResourceMode) {
+    pass2.push('-threads', '6')
+  }
+
   pass2.push('-c:v', options.encoder)
   pass2.push('-crf', options.crf.toString())
   pass2.push('-preset', options.preset)
@@ -365,6 +389,11 @@ function buildAv1FFmpegArgs(
   // Input
   args.push('-i', inputPath)
 
+  // Limit threads in limited resource mode
+  if (config.limitedResourceMode) {
+    args.push('-threads', '6')
+  }
+
   // Video encoding with selected AV1 encoder
   const encoder = config.av1.encoder
   args.push('-c:v', encoder)
@@ -462,6 +491,11 @@ function buildH265FFmpegArgs(
 
   // Input
   args.push('-i', inputPath)
+
+  // Limit threads in limited resource mode
+  if (config.limitedResourceMode) {
+    args.push('-threads', '6')
+  }
 
   // Video encoding with libx265
   args.push('-c:v', config.h265.encoder)

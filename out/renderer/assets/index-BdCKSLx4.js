@@ -8108,14 +8108,36 @@ function Archive() {
   const [fileInfos, setFileInfos] = reactExports.useState([]);
   const [batchInfo, setBatchInfo] = reactExports.useState(null);
   const [isLoadingBatchInfo, setIsLoadingBatchInfo] = reactExports.useState(false);
+  const [whisperProvider, setWhisperProvider] = reactExports.useState("bundled");
+  const [lmstudioEndpoint, setLmstudioEndpoint] = reactExports.useState("http://localhost:1234/v1/audio/transcriptions");
+  const [whisperGpuEnabled, setWhisperGpuEnabled] = reactExports.useState(false);
+  const [whisperGpuAvailable, setWhisperGpuAvailable] = reactExports.useState(false);
+  const [whisperGpuType, setWhisperGpuType] = reactExports.useState("none");
+  const [whisperGpuReason, setWhisperGpuReason] = reactExports.useState();
   reactExports.useEffect(() => {
     let active = true;
     Promise.all([
       window.api.archivalGetDefaultConfig(),
       window.api.archivalDetectEncoders(),
-      window.api.archivalGetStatus()
-    ]).then(([configResult, encoderResult, statusResult]) => {
+      window.api.archivalGetStatus(),
+      window.api.getWhisperProvider(),
+      window.api.getWhisperGpuSettings()
+    ]).then(([configResult, encoderResult, statusResult, whisperResult, gpuResult]) => {
       if (!active) return;
+      if (whisperResult.ok) {
+        if (whisperResult.provider) {
+          setWhisperProvider(whisperResult.provider);
+        }
+        if (whisperResult.endpoint) {
+          setLmstudioEndpoint(whisperResult.endpoint);
+        }
+      }
+      if (gpuResult.ok && gpuResult.settings) {
+        setWhisperGpuEnabled(gpuResult.settings.enabled);
+        setWhisperGpuAvailable(gpuResult.settings.available);
+        setWhisperGpuType(gpuResult.settings.gpuType);
+        setWhisperGpuReason(gpuResult.settings.reason);
+      }
       if (configResult.ok) {
         setDefaultConfig(configResult.config);
         let initialConfig = { ...configResult.config };
@@ -9027,6 +9049,104 @@ function Archive() {
                 /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Save a JPEG thumbnail alongside each encoded video" })
               ] })
             ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: config.extractCaptions ?? false,
+                  onChange: (e) => handleConfigChange("extractCaptions", e.target.checked),
+                  className: "h-4 w-4 rounded border-slate-300"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-sm text-slate-600", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Extract captions" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Generate subtitles using Whisper" })
+              ] })
+            ] }),
+            config.extractCaptions && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ml-7 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-xs font-medium text-slate-500", children: "Transcription Provider" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-4", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-2", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "input",
+                    {
+                      type: "radio",
+                      name: "whisperProvider",
+                      value: "bundled",
+                      checked: whisperProvider === "bundled",
+                      onChange: () => {
+                        setWhisperProvider("bundled");
+                        void window.api.setWhisperProvider({ provider: "bundled" });
+                      },
+                      className: "h-3.5 w-3.5"
+                    }
+                  ),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm text-slate-600", children: "Bundled Whisper" })
+                ] }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-2", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "input",
+                    {
+                      type: "radio",
+                      name: "whisperProvider",
+                      value: "lmstudio",
+                      checked: whisperProvider === "lmstudio",
+                      onChange: () => {
+                        setWhisperProvider("lmstudio");
+                        void window.api.setWhisperProvider({ provider: "lmstudio", endpoint: lmstudioEndpoint });
+                      },
+                      className: "h-3.5 w-3.5"
+                    }
+                  ),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm text-slate-600", children: "LM Studio" })
+                ] })
+              ] }),
+              whisperProvider === "lmstudio" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-1", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "text-xs text-slate-500", children: "API Endpoint" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "text",
+                    value: lmstudioEndpoint,
+                    onChange: (e) => {
+                      setLmstudioEndpoint(e.target.value);
+                      void window.api.setWhisperProvider({ provider: "lmstudio", endpoint: e.target.value });
+                    },
+                    placeholder: "http://localhost:1234/v1/audio/transcriptions",
+                    className: "w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 placeholder-slate-400"
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "OpenAI-compatible transcription endpoint" })
+              ] }),
+              whisperProvider === "bundled" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-2", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Requires whisper model configured in Settings → Processing" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "input",
+                      {
+                        type: "checkbox",
+                        id: "whisper-gpu",
+                        checked: whisperGpuEnabled,
+                        disabled: !whisperGpuAvailable,
+                        onChange: (e) => {
+                          setWhisperGpuEnabled(e.target.checked);
+                          void window.api.setWhisperGpuEnabled(e.target.checked);
+                        },
+                        className: "h-3.5 w-3.5 rounded border-slate-300 disabled:opacity-50"
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { htmlFor: "whisper-gpu", className: `text-xs ${whisperGpuAvailable ? "text-slate-600" : "text-slate-400"}`, children: [
+                      "GPU Acceleration ",
+                      whisperGpuType === "metal" ? "(Metal)" : ""
+                    ] })
+                  ] }),
+                  whisperGpuAvailable && whisperGpuEnabled && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-700", children: "Enabled" })
+                ] }),
+                !whisperGpuAvailable && whisperGpuReason && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-amber-600", children: whisperGpuReason })
+              ] })
+            ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3 text-rose-600", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "input",
@@ -9038,6 +9158,21 @@ function Archive() {
                 }
               ),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm", children: "Delete original after encoding" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: config.limitedResourceMode ?? false,
+                  onChange: (e) => handleConfigChange("limitedResourceMode", e.target.checked),
+                  className: "h-4 w-4 rounded border-slate-300"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-sm text-slate-600", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Limited resource mode" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Use only 6 threads for lower CPU usage" })
+              ] })
             ] })
           ] })
         ] })

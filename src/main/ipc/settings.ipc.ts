@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { createHash } from 'node:crypto'
+import { arch, platform } from 'node:os'
 import { getDatabase } from '../database'
 import { getDownloadPath } from '../utils/paths'
 import { getSetting, setSetting } from '../utils/settings'
@@ -219,6 +220,71 @@ export function registerSettingsHandlers(deps: SettingsHandlerDeps = {}): void {
     const selectedPath = result.filePaths[0]
     setSetting(db, 'whisper_model_path', selectedPath)
     return { ok: true, path: selectedPath }
+  })
+
+  // Whisper provider settings (bundled vs LM Studio)
+  ipcMain.handle('settings/get-whisper-provider', async () => {
+    const provider = getSetting(db, 'whisper_provider') ?? 'bundled'
+    const endpoint = getSetting(db, 'whisper_lmstudio_endpoint') ?? 'http://localhost:1234/v1/audio/transcriptions'
+    return { ok: true, provider, endpoint }
+  })
+
+  ipcMain.handle('settings/set-whisper-provider', async (_event, payload: {
+    provider: 'bundled' | 'lmstudio'
+    endpoint?: string
+  }) => {
+    if (!payload || !payload.provider) {
+      return { ok: false, error: 'Invalid payload' }
+    }
+    setSetting(db, 'whisper_provider', payload.provider)
+    if (payload.endpoint) {
+      setSetting(db, 'whisper_lmstudio_endpoint', payload.endpoint)
+    }
+    return { ok: true }
+  })
+
+  // Whisper GPU acceleration settings
+  // GPU acceleration is only available on Apple Silicon (macOS ARM64) via Metal
+  // AMD GPUs are not supported by bundled whisper.cpp - use LM Studio instead
+  ipcMain.handle('settings/get-whisper-gpu', async () => {
+    const currentPlatform = platform() as 'darwin' | 'win32' | 'linux'
+    const currentArch = arch()
+    const isAppleSilicon = currentPlatform === 'darwin' && currentArch === 'arm64'
+
+    // Check if GPU is available
+    let gpuAvailable = false
+    let gpuType: 'metal' | 'none' = 'none'
+    let reason: string | undefined
+
+    if (isAppleSilicon) {
+      gpuAvailable = true
+      gpuType = 'metal'
+    } else if (currentPlatform === 'darwin') {
+      reason = 'GPU acceleration requires Apple Silicon (M1/M2/M3). Intel Macs use CPU only.'
+    } else {
+      // Windows, Linux, and other platforms
+      reason = 'GPU acceleration is not supported by bundled Whisper on this platform. Use LM Studio provider for GPU-accelerated transcription.'
+    }
+
+    // Get stored setting (default to true if GPU is available)
+    const storedValue = getSetting(db, 'whisper_gpu_enabled')
+    const enabled = storedValue !== null ? storedValue === '1' : gpuAvailable
+
+    return {
+      ok: true,
+      settings: {
+        enabled: enabled && gpuAvailable, // Only enabled if available
+        available: gpuAvailable,
+        platform: currentPlatform,
+        gpuType,
+        reason
+      }
+    }
+  })
+
+  ipcMain.handle('settings/set-whisper-gpu', async (_event, enabled: boolean) => {
+    setBooleanSetting(db, 'whisper_gpu_enabled', enabled)
+    return { ok: true }
   })
 
   ipcMain.handle('settings/get-privacy', async () => {
