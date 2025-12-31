@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises'
 import { createGunzip } from 'node:zlib'
 import { resolveBundledBinary, getBundledBinaryDir } from '../../utils/binary'
 import { Logger } from '../../utils/logger'
-import type { Av1Encoder } from '../../../shared/types/archival.types'
+import type { Av1Encoder, H265Encoder } from '../../../shared/types/archival.types'
 
 const logger = new Logger('EncoderDetector')
 
@@ -14,6 +14,9 @@ export interface EncoderInfo {
   available: Av1Encoder[]
   recommended: Av1Encoder | null
   hasAv1Support: boolean
+  // H.265 encoder info
+  h265Available: H265Encoder[]
+  hasH265Support: boolean
   canUpgrade: boolean // True if we can download a better FFmpeg
 }
 
@@ -26,7 +29,7 @@ export interface UpgradeProgress {
 let cachedEncoderInfo: EncoderInfo | null = null
 
 /**
- * Detect available AV1 encoders in the bundled FFmpeg
+ * Detect available AV1 and H.265 encoders in the bundled FFmpeg
  * Results are cached after first detection
  */
 export async function detectAv1Encoders(): Promise<EncoderInfo> {
@@ -36,10 +39,12 @@ export async function detectAv1Encoders(): Promise<EncoderInfo> {
 
   const ffmpegPath = resolveBundledBinary('ffmpeg')
   const available: Av1Encoder[] = []
+  const h265Available: H265Encoder[] = []
 
   try {
     const encoders = await getEncoderList(ffmpegPath)
 
+    // Check for AV1 encoders
     // Check for libaom-av1 (more widely available)
     if (encoders.includes('libaom-av1')) {
       available.push('libaom-av1')
@@ -48,6 +53,12 @@ export async function detectAv1Encoders(): Promise<EncoderInfo> {
     // Check for libsvtav1 (faster, but less common)
     if (encoders.includes('libsvtav1')) {
       available.push('libsvtav1')
+    }
+
+    // Check for H.265/HEVC encoders
+    // libx265 is the standard software encoder for HEVC
+    if (encoders.includes('libx265')) {
+      h265Available.push('libx265')
     }
   } catch {
     // If detection fails, assume no encoders available
@@ -70,6 +81,8 @@ export async function detectAv1Encoders(): Promise<EncoderInfo> {
     available,
     recommended,
     hasAv1Support: available.length > 0,
+    h265Available,
+    hasH265Support: h265Available.length > 0,
     canUpgrade
   }
 

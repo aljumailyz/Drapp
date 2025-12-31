@@ -652,6 +652,7 @@ export type ArchivalBatchJob = {
 export type ArchivalEncodingConfigFull = {
   resolution: 'source' | '4k' | '1440p' | '1080p' | '720p' | '480p' | '360p'
   colorMode: 'hdr' | 'sdr' | 'auto'
+  codec: 'av1' | 'h265'
   av1: {
     encoder: 'libaom-av1' | 'libsvtav1'
     preset: number
@@ -661,6 +662,16 @@ export type ArchivalEncodingConfigFull = {
     tune: 0 | 1 | 2
     adaptiveQuantization: boolean
     crf: number
+    twoPass?: boolean
+  }
+  h265: {
+    encoder: 'libx265'
+    preset: 'ultrafast' | 'superfast' | 'veryfast' | 'faster' | 'fast' | 'medium' | 'slow' | 'slower' | 'veryslow'
+    tune?: 'film' | 'animation' | 'grain' | 'fastdecode' | 'zerolatency'
+    crf: number
+    keyframeInterval: number
+    bframes: number
+    twoPass?: boolean
   }
   audioCopy: boolean
   audioCodec?: 'opus' | 'flac' | 'aac'
@@ -777,6 +788,9 @@ export type ArchivalEncoderInfo = {
   available: Array<'libaom-av1' | 'libsvtav1'>
   recommended: 'libaom-av1' | 'libsvtav1' | null
   hasAv1Support: boolean
+  // H.265 encoder info
+  h265Available: Array<'libx265'>
+  hasH265Support: boolean
   canUpgrade: boolean
 }
 

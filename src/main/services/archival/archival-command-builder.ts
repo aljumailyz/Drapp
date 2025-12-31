@@ -1,24 +1,320 @@
 import type {
   ArchivalEncodingConfig,
   VideoSourceInfo,
-  Av1Options
+  Av1Options,
+  H265Options
 } from '../../../shared/types/archival.types'
 import { getOptimalCrf, getResolutionCategory } from '../../../shared/types/archival.types'
 
 /**
- * Builds FFmpeg command arguments for archival AV1 encoding
+ * Two-pass encoding arguments
+ * Contains separate argument arrays for each pass
+ */
+export interface TwoPassArgs {
+  pass1: string[]
+  pass2: string[]
+  passLogFile: string
+}
+
+/**
+ * Builds FFmpeg command arguments for archival encoding
  *
- * Supports two encoders:
- * - libaom-av1: Higher quality, slower, widely available
- * - libsvtav1: Faster, slightly lower quality, may not be available
+ * Supports two codecs:
+ * - AV1 (libaom-av1, libsvtav1): Best compression for archival
+ * - H.265/HEVC (libx265): Better compatibility for web delivery
  *
  * Key features:
  * - Scene-change aware keyframe placement (prevents GOP crossing scene cuts)
  * - Film grain synthesis (SVT-AV1 only)
  * - HDR passthrough with proper color metadata
  * - Audio stream copy by default
+ * - Two-pass encoding for better quality/size efficiency (optional)
  */
 export function buildArchivalFFmpegArgs(
+  inputPath: string,
+  outputPath: string,
+  config: ArchivalEncodingConfig,
+  sourceInfo: VideoSourceInfo
+): string[] {
+  // Dispatch to codec-specific builder
+  if (config.codec === 'h265') {
+    return buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo)
+  }
+  return buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo)
+}
+
+/**
+ * Check if two-pass encoding is enabled for the current config
+ */
+export function isTwoPassEnabled(config: ArchivalEncodingConfig): boolean {
+  if (config.codec === 'h265') {
+    return config.h265.twoPass === true
+  }
+  // For SVT-AV1, two-pass through FFmpeg isn't well supported
+  // Only enable for libaom-av1
+  if (config.av1.encoder === 'libaom-av1') {
+    return config.av1.twoPass === true
+  }
+  return false
+}
+
+/**
+ * Builds FFmpeg arguments for two-pass encoding
+ * Returns separate argument arrays for pass 1 and pass 2
+ *
+ * @param inputPath - Path to input video file
+ * @param outputPath - Path to output video file
+ * @param config - Archival encoding configuration
+ * @param sourceInfo - Source video metadata
+ * @param passLogDir - Directory to store pass log files
+ * @returns TwoPassArgs with pass1, pass2, and passLogFile paths
+ */
+export function buildTwoPassArgs(
+  inputPath: string,
+  outputPath: string,
+  config: ArchivalEncodingConfig,
+  sourceInfo: VideoSourceInfo,
+  passLogDir: string
+): TwoPassArgs {
+  const { basename, join } = require('node:path')
+  const inputName = basename(inputPath, require('node:path').extname(inputPath))
+  const passLogFile = join(passLogDir, `${inputName}-pass`)
+
+  if (config.codec === 'h265') {
+    return buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile)
+  }
+  return buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile)
+}
+
+/**
+ * Build two-pass arguments for AV1 (libaom-av1 only)
+ */
+function buildAv1TwoPassArgs(
+  inputPath: string,
+  outputPath: string,
+  config: ArchivalEncodingConfig,
+  sourceInfo: VideoSourceInfo,
+  passLogFile: string
+): TwoPassArgs {
+  const options = config.av1
+  const encoder = options.encoder
+
+  // Determine effective CRF
+  const effectiveCrf = options.crf !== 30 ? options.crf : getOptimalCrf(sourceInfo)
+
+  // ===== PASS 1 =====
+  const pass1: string[] = []
+  pass1.push('-i', inputPath)
+  pass1.push('-c:v', encoder)
+  pass1.push('-crf', effectiveCrf.toString())
+
+  if (encoder === 'libaom-av1') {
+    pass1.push('-cpu-used', options.preset.toString())
+    pass1.push(...buildLibaomParams(options, sourceInfo))
+    pass1.push('-pass', '1')
+    pass1.push('-passlogfile', passLogFile)
+  }
+
+  // HDR handling
+  if (sourceInfo.isHdr) {
+    pass1.push(...buildHdrArgs(sourceInfo))
+  } else {
+    pass1.push('-pix_fmt', 'yuv420p')
+  }
+
+  // No audio for pass 1
+  pass1.push('-an')
+
+  // Null output for pass 1
+  pass1.push('-f', 'null')
+  pass1.push('-y')
+  pass1.push(process.platform === 'win32' ? 'NUL' : '/dev/null')
+
+  // ===== PASS 2 =====
+  const pass2: string[] = []
+  pass2.push('-i', inputPath)
+  pass2.push('-c:v', encoder)
+  pass2.push('-crf', effectiveCrf.toString())
+
+  if (encoder === 'libaom-av1') {
+    pass2.push('-cpu-used', options.preset.toString())
+    pass2.push(...buildLibaomParams(options, sourceInfo))
+    pass2.push('-pass', '2')
+    pass2.push('-passlogfile', passLogFile)
+  }
+
+  // HDR handling
+  if (sourceInfo.isHdr) {
+    pass2.push(...buildHdrArgs(sourceInfo))
+  } else {
+    pass2.push('-pix_fmt', 'yuv420p')
+  }
+
+  // Audio handling (same as single-pass)
+  const needsWebmAudioReencode = config.container === 'webm' &&
+    config.audioCopy &&
+    !isWebmCompatibleAudio(sourceInfo.audioCodec)
+
+  if (needsWebmAudioReencode) {
+    pass2.push('-c:a', 'libopus')
+    pass2.push('-b:a', `${config.audioBitrate ?? 128}k`)
+    pass2.push('-ar', '48000')
+  } else if (config.audioCopy) {
+    pass2.push('-c:a', 'copy')
+  } else {
+    pass2.push(...buildAudioArgs(config))
+  }
+
+  // Map streams
+  pass2.push('-map', '0:v:0')
+  pass2.push('-map', '0:a?')
+
+  // Container options
+  if (config.container === 'mp4') {
+    pass2.push('-movflags', '+faststart')
+  }
+
+  pass2.push('-y')
+  pass2.push(outputPath)
+
+  return { pass1, pass2, passLogFile }
+}
+
+/**
+ * Build two-pass arguments for H.265
+ */
+function buildH265TwoPassArgs(
+  inputPath: string,
+  outputPath: string,
+  config: ArchivalEncodingConfig,
+  sourceInfo: VideoSourceInfo,
+  passLogFile: string
+): TwoPassArgs {
+  const options = config.h265
+
+  // ===== PASS 1 =====
+  const pass1: string[] = []
+  pass1.push('-i', inputPath)
+  pass1.push('-c:v', options.encoder)
+  pass1.push('-crf', options.crf.toString())
+  pass1.push('-preset', options.preset)
+
+  // Build x265-params with pass=1
+  const x265ParamsPass1 = buildX265ParamsWithPass(options, sourceInfo, 1, passLogFile)
+  if (x265ParamsPass1) {
+    pass1.push('-x265-params', x265ParamsPass1)
+  }
+
+  if (options.tune) {
+    pass1.push('-tune', options.tune)
+  }
+
+  // HDR handling
+  if (sourceInfo.isHdr) {
+    pass1.push(...buildHdrArgsH265(sourceInfo))
+  } else {
+    pass1.push('-pix_fmt', 'yuv420p')
+  }
+
+  // No audio for pass 1
+  pass1.push('-an')
+
+  // Null output for pass 1
+  pass1.push('-f', 'null')
+  pass1.push('-y')
+  pass1.push(process.platform === 'win32' ? 'NUL' : '/dev/null')
+
+  // ===== PASS 2 =====
+  const pass2: string[] = []
+  pass2.push('-i', inputPath)
+  pass2.push('-c:v', options.encoder)
+  pass2.push('-crf', options.crf.toString())
+  pass2.push('-preset', options.preset)
+
+  // Build x265-params with pass=2
+  const x265ParamsPass2 = buildX265ParamsWithPass(options, sourceInfo, 2, passLogFile)
+  if (x265ParamsPass2) {
+    pass2.push('-x265-params', x265ParamsPass2)
+  }
+
+  if (options.tune) {
+    pass2.push('-tune', options.tune)
+  }
+
+  // HDR handling
+  if (sourceInfo.isHdr) {
+    pass2.push(...buildHdrArgsH265(sourceInfo))
+  } else {
+    pass2.push('-pix_fmt', 'yuv420p')
+  }
+
+  // Audio handling (same as single-pass)
+  if (config.audioCopy) {
+    pass2.push('-c:a', 'copy')
+  } else {
+    pass2.push(...buildAudioArgs(config))
+  }
+
+  // Map streams
+  pass2.push('-map', '0:v:0')
+  pass2.push('-map', '0:a?')
+
+  // Container options
+  if (config.container === 'mp4') {
+    pass2.push('-movflags', '+faststart')
+    pass2.push('-tag:v', 'hvc1')
+  }
+
+  pass2.push('-y')
+  pass2.push(outputPath)
+
+  return { pass1, pass2, passLogFile }
+}
+
+/**
+ * Build x265-params string with pass information for two-pass encoding
+ */
+function buildX265ParamsWithPass(
+  options: H265Options,
+  sourceInfo: VideoSourceInfo,
+  passNumber: 1 | 2,
+  statsFile: string
+): string {
+  const params: string[] = []
+
+  // Pass control
+  params.push(`pass=${passNumber}`)
+  params.push(`stats=${statsFile}.log`)
+
+  // Standard params (same as single-pass)
+  params.push(`keyint=${options.keyframeInterval}`)
+  params.push(`min-keyint=${Math.min(options.keyframeInterval, 25)}`)
+  params.push(`bframes=${options.bframes}`)
+  params.push('scenecut=40')
+  params.push('ref=4')
+  params.push('rc-lookahead=40')
+  params.push('sao=1')
+
+  if (sourceInfo.isHdr) {
+    params.push('hdr10=1')
+    params.push('hdr10-opt=1')
+  }
+
+  params.push('aq-mode=3')
+
+  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
+    params.push('level-idc=51')
+  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
+    params.push('level-idc=41')
+  }
+
+  return params.join(':')
+}
+
+/**
+ * Builds FFmpeg command arguments for AV1 encoding
+ */
+function buildAv1FFmpegArgs(
   inputPath: string,
   outputPath: string,
   config: ArchivalEncodingConfig,
@@ -101,6 +397,80 @@ export function buildArchivalFFmpegArgs(
   if (config.container === 'mp4') {
     // Enable faststart for MP4 (moves moov atom to beginning)
     args.push('-movflags', '+faststart')
+  }
+
+  // Overwrite output
+  args.push('-y')
+
+  // Output
+  args.push(outputPath)
+
+  return args
+}
+
+/**
+ * Builds FFmpeg command arguments for H.265/HEVC encoding
+ * Optimized for web delivery with broad compatibility
+ */
+function buildH265FFmpegArgs(
+  inputPath: string,
+  outputPath: string,
+  config: ArchivalEncodingConfig,
+  sourceInfo: VideoSourceInfo
+): string[] {
+  const args: string[] = []
+
+  // Input
+  args.push('-i', inputPath)
+
+  // Video encoding with libx265
+  args.push('-c:v', config.h265.encoder)
+
+  // CRF quality (H.265 uses 0-51 scale, 23 is default)
+  args.push('-crf', config.h265.crf.toString())
+
+  // Preset for encoding speed/quality tradeoff
+  args.push('-preset', config.h265.preset)
+
+  // Build x265-params string
+  const x265Params = buildX265Params(config.h265, sourceInfo)
+  if (x265Params) {
+    args.push('-x265-params', x265Params)
+  }
+
+  // Tune for specific content (optional)
+  if (config.h265.tune) {
+    args.push('-tune', config.h265.tune)
+  }
+
+  // Handle HDR passthrough
+  if (sourceInfo.isHdr) {
+    args.push(...buildHdrArgsH265(sourceInfo))
+  } else {
+    // SDR: Use standard 8-bit pixel format
+    args.push('-pix_fmt', 'yuv420p')
+  }
+
+  // Audio handling for H.265 (typically paired with AAC for web delivery)
+  if (config.audioCopy) {
+    args.push('-c:a', 'copy')
+  } else {
+    args.push(...buildAudioArgs(config))
+  }
+
+  // Map video and audio streams explicitly
+  args.push('-map', '0:v:0') // First video stream
+  args.push('-map', '0:a?')  // All audio streams (optional)
+
+  // Container-specific options
+  if (config.container === 'mp4') {
+    // Enable faststart for MP4 (moves moov atom to beginning for web streaming)
+    args.push('-movflags', '+faststart')
+  }
+
+  // Tag for better compatibility (hvc1 is more widely supported than hev1)
+  if (config.container === 'mp4') {
+    args.push('-tag:v', 'hvc1')
   }
 
   // Overwrite output
@@ -245,6 +615,84 @@ function buildSvtAv1Params(options: Av1Options, sourceInfo: VideoSourceInfo): st
 }
 
 /**
+ * Build x265-specific parameters string
+ * Optimized for web delivery with good compression
+ */
+function buildX265Params(options: H265Options, sourceInfo: VideoSourceInfo): string {
+  const params: string[] = []
+
+  // Keyframe interval (GOP size)
+  // For web delivery, shorter GOPs are better for seeking
+  params.push(`keyint=${options.keyframeInterval}`)
+  params.push(`min-keyint=${Math.min(options.keyframeInterval, 25)}`)
+
+  // B-frames for better compression
+  params.push(`bframes=${options.bframes}`)
+
+  // Scene cut detection for better keyframe placement
+  params.push('scenecut=40')
+
+  // Reference frames for better compression
+  params.push('ref=4')
+
+  // Lookahead for better rate control
+  params.push('rc-lookahead=40')
+
+  // Enable SAO (Sample Adaptive Offset) for better quality
+  params.push('sao=1')
+
+  // For HDR content, ensure proper handling
+  if (sourceInfo.isHdr) {
+    params.push('hdr10=1')
+    params.push('hdr10-opt=1')
+  }
+
+  // Adaptive quantization for better perceptual quality
+  params.push('aq-mode=3') // Auto-variance AQ
+
+  // Level for compatibility (5.1 supports up to 4K@60fps)
+  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
+    params.push('level-idc=51')
+  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
+    params.push('level-idc=41')
+  }
+
+  return params.join(':')
+}
+
+/**
+ * Build HDR passthrough arguments for H.265
+ * Preserves HDR metadata with proper color parameters
+ */
+function buildHdrArgsH265(sourceInfo: VideoSourceInfo): string[] {
+  const args: string[] = []
+
+  // Use 10-bit pixel format for HDR
+  args.push('-pix_fmt', 'yuv420p10le')
+
+  // Preserve color metadata
+  if (sourceInfo.colorSpace) {
+    const colorParams = parseColorSpace(sourceInfo.colorSpace)
+    if (colorParams.primaries) {
+      args.push('-color_primaries', colorParams.primaries)
+    }
+    if (colorParams.transfer) {
+      args.push('-color_trc', colorParams.transfer)
+    }
+    if (colorParams.matrix) {
+      args.push('-colorspace', colorParams.matrix)
+    }
+  } else {
+    // Default HDR color space (BT.2020 with PQ)
+    args.push('-color_primaries', 'bt2020')
+    args.push('-color_trc', 'smpte2084')
+    args.push('-colorspace', 'bt2020nc')
+  }
+
+  return args
+}
+
+/**
  * Build HDR passthrough arguments
  * Preserves HDR metadata and uses appropriate pixel format
  */
@@ -375,28 +823,55 @@ export function describeArchivalSettings(
   sourceInfo?: VideoSourceInfo
 ): string {
   const lines: string[] = []
-  const encoder = config.av1.encoder
 
-  const encoderName = encoder === 'libsvtav1' ? 'SVT-AV1 (libsvtav1)' : 'libaom-av1'
-  lines.push(`Encoder: ${encoderName}`)
-  lines.push(`Preset: ${config.av1.preset} (${describePreset(config.av1.preset, encoder)})`)
+  // Codec selection
+  lines.push(`Codec: ${config.codec === 'h265' ? 'H.265/HEVC' : 'AV1'}`)
 
-  if (sourceInfo) {
-    const effectiveCrf = getOptimalCrf(sourceInfo)
-    const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
-    lines.push(`Resolution: ${sourceInfo.width}x${sourceInfo.height} (${resolution})`)
-    lines.push(`CRF: ${effectiveCrf} (${sourceInfo.isHdr ? 'HDR' : 'SDR'} profile)`)
-    lines.push(`Frame Rate: ${sourceInfo.frameRate.toFixed(2)} fps`)
-    lines.push(`Color: ${sourceInfo.isHdr ? 'HDR (10-bit)' : 'SDR (8-bit)'}`)
+  if (config.codec === 'h265') {
+    // H.265 settings
+    lines.push(`Encoder: libx265`)
+    lines.push(`Preset: ${config.h265.preset}`)
+
+    if (sourceInfo) {
+      const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
+      lines.push(`Resolution: ${sourceInfo.width}x${sourceInfo.height} (${resolution})`)
+      lines.push(`CRF: ${config.h265.crf}`)
+      lines.push(`Frame Rate: ${sourceInfo.frameRate.toFixed(2)} fps`)
+      lines.push(`Color: ${sourceInfo.isHdr ? 'HDR (10-bit)' : 'SDR (8-bit)'}`)
+    } else {
+      lines.push(`CRF: ${config.h265.crf}`)
+    }
+
+    lines.push(`GOP Size: ${config.h265.keyframeInterval} frames`)
+    lines.push(`B-frames: ${config.h265.bframes}`)
+
+    if (config.h265.tune) {
+      lines.push(`Tune: ${config.h265.tune}`)
+    }
   } else {
-    lines.push(`CRF: ${config.av1.crf} (auto-adjusted per video)`)
-  }
+    // AV1 settings
+    const encoder = config.av1.encoder
+    const encoderName = encoder === 'libsvtav1' ? 'SVT-AV1 (libsvtav1)' : 'libaom-av1'
+    lines.push(`Encoder: ${encoderName}`)
+    lines.push(`Preset: ${config.av1.preset} (${describePreset(config.av1.preset, encoder)})`)
 
-  lines.push(`GOP Size: ${config.av1.keyframeInterval} frames (scene-aware)`)
+    if (sourceInfo) {
+      const effectiveCrf = getOptimalCrf(sourceInfo)
+      const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
+      lines.push(`Resolution: ${sourceInfo.width}x${sourceInfo.height} (${resolution})`)
+      lines.push(`CRF: ${effectiveCrf} (${sourceInfo.isHdr ? 'HDR' : 'SDR'} profile)`)
+      lines.push(`Frame Rate: ${sourceInfo.frameRate.toFixed(2)} fps`)
+      lines.push(`Color: ${sourceInfo.isHdr ? 'HDR (10-bit)' : 'SDR (8-bit)'}`)
+    } else {
+      lines.push(`CRF: ${config.av1.crf} (auto-adjusted per video)`)
+    }
 
-  // Film grain only applies to SVT-AV1
-  if (encoder === 'libsvtav1') {
-    lines.push(`Film Grain: ${config.av1.filmGrainSynthesis > 0 ? `Level ${config.av1.filmGrainSynthesis}` : 'Disabled'}`)
+    lines.push(`GOP Size: ${config.av1.keyframeInterval} frames (scene-aware)`)
+
+    // Film grain only applies to SVT-AV1
+    if (encoder === 'libsvtav1') {
+      lines.push(`Film Grain: ${config.av1.filmGrainSynthesis > 0 ? `Level ${config.av1.filmGrainSynthesis}` : 'Disabled'}`)
+    }
   }
 
   // Determine audio handling description

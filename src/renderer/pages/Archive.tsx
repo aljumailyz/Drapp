@@ -15,8 +15,14 @@ import {
   getErrorMessage,
   getResolutionCategory,
   getBitrateAdjustedCrf,
+  estimateEncodingTime,
+  formatEstimatedTime,
   type ArchivalPreset,
-  type ArchivalErrorType
+  type ArchivalErrorType,
+  type ArchivalCodec,
+  type ArchivalResolution,
+  type Av1Encoder,
+  type H265Encoder
 } from '../../shared/types/archival.types'
 
 type PartialConfig = Partial<Omit<ArchivalEncodingConfigFull, 'outputDir'>>
@@ -35,6 +41,31 @@ const CONTAINER_OPTIONS = [
   { value: 'mkv', label: 'MKV (recommended)' },
   { value: 'mp4', label: 'MP4' },
   { value: 'webm', label: 'WebM' }
+]
+
+const CODEC_OPTIONS: { value: ArchivalCodec; label: string; description: string }[] = [
+  {
+    value: 'av1',
+    label: 'AV1',
+    description: 'Best compression for archival. Smaller files, longer encoding.'
+  },
+  {
+    value: 'h265',
+    label: 'H.265 (HEVC)',
+    description: 'Better compatibility for web delivery. Faster encoding, wider device support.'
+  }
+]
+
+const H265_PRESET_OPTIONS = [
+  { value: 'ultrafast', label: 'Ultrafast' },
+  { value: 'superfast', label: 'Superfast' },
+  { value: 'veryfast', label: 'Very Fast' },
+  { value: 'faster', label: 'Faster' },
+  { value: 'fast', label: 'Fast' },
+  { value: 'medium', label: 'Medium (recommended)' },
+  { value: 'slow', label: 'Slow' },
+  { value: 'slower', label: 'Slower' },
+  { value: 'veryslow', label: 'Very Slow' }
 ]
 
 const PRESET_OPTIONS: { value: ArchivalPreset; label: string; description: string }[] = [
@@ -102,7 +133,31 @@ export default function Archive(): JSX.Element {
       if (!active) return
       if (configResult.ok) {
         setDefaultConfig(configResult.config)
-        setConfig(configResult.config)
+        let initialConfig = { ...configResult.config }
+
+        // Auto-select available codec if default (AV1) isn't available
+        if (encoderResult.ok && encoderResult.encoderInfo) {
+          const info = encoderResult.encoderInfo
+          const defaultCodec = initialConfig.codec ?? 'av1'
+
+          // If default codec isn't available, switch to available one
+          if (defaultCodec === 'av1' && !info.hasAv1Support && info.hasH265Support) {
+            initialConfig = {
+              ...initialConfig,
+              codec: 'h265',
+              container: 'mp4',
+              audioCodec: 'aac'
+            }
+          } else if (defaultCodec === 'h265' && !info.hasH265Support && info.hasAv1Support) {
+            initialConfig = {
+              ...initialConfig,
+              codec: 'av1',
+              container: 'mkv'
+            }
+          }
+        }
+
+        setConfig(initialConfig)
       }
       if (encoderResult.ok && encoderResult.encoderInfo) {
         setEncoderInfo(encoderResult.encoderInfo)
@@ -446,6 +501,37 @@ export default function Archive(): JSX.Element {
     }))
   }, [])
 
+  const handleH265Change = useCallback(<K extends keyof NonNullable<PartialConfig['h265']>>(
+    key: K,
+    value: NonNullable<PartialConfig['h265']>[K]
+  ) => {
+    setConfig((prev) => ({
+      ...prev,
+      h265: { ...prev.h265, [key]: value } as PartialConfig['h265']
+    }))
+  }, [])
+
+  const handleCodecChange = useCallback((codec: ArchivalCodec) => {
+    setConfig((prev) => {
+      const newConfig = { ...prev, codec }
+      // Adjust container based on codec for optimal compatibility
+      if (codec === 'h265') {
+        // H.265 is typically delivered in MP4 for web
+        // Also switch from WebM if selected (not compatible with H.265)
+        if (prev.container === 'webm' || !prev.container) {
+          newConfig.container = 'mp4'
+        }
+        newConfig.audioCodec = 'aac'
+      } else {
+        // AV1 works best in MKV, but keep MP4/WebM if already selected
+        if (!prev.container) {
+          newConfig.container = 'mkv'
+        }
+      }
+      return newConfig
+    })
+  }, [])
+
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -489,23 +575,28 @@ export default function Archive(): JSX.Element {
     <div className="flex flex-col gap-6">
       {/* Encoder Status Banner */}
       {encoderInfo && (
-        <section className={`rounded-2xl border p-4 ${encoderInfo.hasAv1Support ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+        <section className={`rounded-2xl border p-4 ${(encoderInfo.hasAv1Support || encoderInfo.hasH265Support) ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${encoderInfo.hasAv1Support ? 'bg-emerald-200 text-emerald-800' : 'bg-amber-200 text-amber-800'}`}>
                   {encoderInfo.hasAv1Support ? 'AV1 Ready' : 'AV1 Not Available'}
                 </span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${encoderInfo.hasH265Support ? 'bg-emerald-200 text-emerald-800' : 'bg-amber-200 text-amber-800'}`}>
+                  {encoderInfo.hasH265Support ? 'H.265 Ready' : 'H.265 Not Available'}
+                </span>
                 {encoderInfo.recommended && (
                   <span className="text-xs text-slate-500">
-                    Recommended: {encoderInfo.recommended}
+                    AV1: {encoderInfo.recommended}
                   </span>
                 )}
               </div>
               <p className="mt-1 text-sm text-slate-600">
-                {encoderInfo.hasAv1Support
-                  ? `Available encoders: ${encoderInfo.available.join(', ')}`
-                  : 'Upgrade FFmpeg to enable AV1 encoding for optimal archival quality.'}
+                {encoderInfo.hasAv1Support && encoderInfo.hasH265Support
+                  ? `Available: AV1 (${encoderInfo.available.join(', ')}), H.265 (${encoderInfo.h265Available.join(', ')})`
+                  : encoderInfo.hasH265Support
+                    ? `H.265 available (${encoderInfo.h265Available.join(', ')}). Upgrade FFmpeg for AV1 support.`
+                    : 'Upgrade FFmpeg to enable AV1 encoding for optimal archival quality.'}
               </p>
             </div>
             {encoderInfo.canUpgrade && (
@@ -528,7 +619,7 @@ export default function Archive(): JSX.Element {
         <section className="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900">Select Files</h3>
           <p className="mt-1 text-sm text-slate-500">
-            Choose video files to archive with AV1 encoding for maximum quality and compression.
+            Choose video files to encode. Use AV1 for archival or H.265 for web delivery.
           </p>
 
           <div className="mt-5 space-y-4">
@@ -669,10 +760,40 @@ export default function Archive(): JSX.Element {
         <section className="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900">Encoding Settings</h3>
           <p className="mt-1 text-sm text-slate-500">
-            Configure AV1 encoding parameters for archival quality.
+            Configure encoding parameters for video archival or web delivery.
           </p>
 
           <div className="mt-5 space-y-4">
+            {/* Codec Selector */}
+            <div className="space-y-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Video Codec</span>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {CODEC_OPTIONS.map((codec) => {
+                  const isDisabled = codec.value === 'av1' ? !encoderInfo?.hasAv1Support : !encoderInfo?.hasH265Support
+                  return (
+                    <button
+                      key={codec.value}
+                      type="button"
+                      onClick={() => handleCodecChange(codec.value)}
+                      disabled={isDisabled}
+                      className={`rounded-lg border px-4 py-3 text-left transition ${
+                        config.codec === codec.value
+                          ? 'border-slate-900 bg-slate-900 text-white'
+                          : isDisabled
+                            ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-400'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                      }`}
+                    >
+                      <p className="text-sm font-medium">{codec.label}</p>
+                      <p className={`mt-0.5 text-xs ${config.codec === codec.value ? 'text-slate-300' : isDisabled ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {isDisabled ? 'Encoder not available' : codec.description}
+                      </p>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
             {/* Preset Selector */}
             <div className="space-y-2">
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Encoding Preset</span>
@@ -705,9 +826,16 @@ export default function Archive(): JSX.Element {
                 onChange={(e) => handleConfigChange('container', e.target.value as PartialConfig['container'])}
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
               >
-                {CONTAINER_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
+                {CONTAINER_OPTIONS
+                  // Filter out WebM for H.265 (not supported)
+                  .filter((opt) => !(config.codec === 'h265' && opt.value === 'webm'))
+                  .map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                      {config.codec === 'h265' && opt.value === 'mp4' ? ' (recommended for H.265)' : ''}
+                      {config.codec !== 'h265' && opt.value === 'mkv' ? ' (recommended for AV1)' : ''}
+                    </option>
+                  ))}
               </select>
             </label>
 
@@ -744,84 +872,257 @@ export default function Archive(): JSX.Element {
                   </select>
                 </label>
 
-                {/* AV1 Encoder */}
-                {encoderInfo && encoderInfo.available.length > 0 && (
-                  <label className="block">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">AV1 Encoder</span>
-                    <select
-                      value={config.av1?.encoder ?? encoderInfo.recommended ?? 'libsvtav1'}
-                      onChange={(e) => handleAv1Change('encoder', e.target.value as 'libaom-av1' | 'libsvtav1')}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-                    >
-                      {encoderInfo.available.map((enc) => (
-                        <option key={enc} value={enc}>
-                          {enc} {enc === encoderInfo.recommended ? '(recommended)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                {/* AV1-specific settings */}
+                {config.codec !== 'h265' && (
+                  <>
+                    {/* AV1 Encoder */}
+                    {encoderInfo && encoderInfo.available.length > 0 && (
+                      <label className="block">
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">AV1 Encoder</span>
+                        <select
+                          value={config.av1?.encoder ?? encoderInfo.recommended ?? 'libsvtav1'}
+                          onChange={(e) => handleAv1Change('encoder', e.target.value as 'libaom-av1' | 'libsvtav1')}
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                        >
+                          {encoderInfo.available.map((enc) => (
+                            <option key={enc} value={enc}>
+                              {enc} {enc === encoderInfo.recommended ? '(recommended)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
+                    {/* AV1 CRF Quality */}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Quality (CRF)</span>
+                        <span className="text-sm font-semibold text-slate-700">{config.av1?.crf ?? 30}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={18}
+                        max={45}
+                        value={config.av1?.crf ?? 30}
+                        onChange={(e) => handleAv1Change('crf', Number(e.target.value))}
+                        className="mt-2 w-full accent-slate-900"
+                      />
+                      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
+                        <span>Higher quality (24-28)</span>
+                        <span>Smaller file (35+)</span>
+                      </div>
+                      {/* CRF quick presets */}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {[
+                          { value: 26, label: 'High', desc: 'Near lossless' },
+                          { value: 30, label: 'Recommended', desc: 'Best balance for archival' },
+                          { value: 35, label: 'Medium', desc: 'Good compression' },
+                          { value: 40, label: 'Small', desc: 'Maximum compression' }
+                        ].map((preset) => (
+                          <button
+                            key={preset.value}
+                            type="button"
+                            onClick={() => handleAv1Change('crf', preset.value)}
+                            className={`rounded px-2 py-1 text-[10px] transition ${
+                              config.av1?.crf === preset.value
+                                ? 'bg-slate-700 text-white'
+                                : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                            }`}
+                            title={preset.desc}
+                          >
+                            {preset.label} ({preset.value})
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-[10px] text-slate-400">
+                        <strong>Tip:</strong> AV1 CRF 30 is excellent for archival. Auto-adjusted based on resolution and HDR.
+                      </p>
+                    </div>
+
+                    {/* AV1 Preset Speed */}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Speed Preset</span>
+                        <span className="text-sm font-semibold text-slate-700">{config.av1?.preset ?? 6}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={12}
+                        value={config.av1?.preset ?? 6}
+                        onChange={(e) => handleAv1Change('preset', Number(e.target.value))}
+                        className="mt-2 w-full accent-slate-900"
+                      />
+                      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
+                        <span>Slower (better)</span>
+                        <span>Faster</span>
+                      </div>
+                    </div>
+
+                    {/* Film Grain Synthesis */}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Film Grain</span>
+                        <span className="text-sm font-semibold text-slate-700">
+                          {config.av1?.filmGrainSynthesis === 0 ? 'Off' : config.av1?.filmGrainSynthesis ?? 10}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={20}
+                        value={config.av1?.filmGrainSynthesis ?? 10}
+                        onChange={(e) => handleAv1Change('filmGrainSynthesis', Number(e.target.value))}
+                        className="mt-2 w-full accent-slate-900"
+                      />
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        Synthesizes grain for better compression. Disable (0) for screen recordings.
+                      </p>
+                    </div>
+
+                    {/* Two-Pass Encoding (libaom-av1 only) */}
+                    {config.av1?.encoder === 'libaom-av1' && (
+                      <div className="rounded-lg border border-slate-200 bg-white p-3">
+                        <label className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={config.av1?.twoPass ?? false}
+                            onChange={(e) => handleAv1Change('twoPass', e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                          />
+                          <div>
+                            <span className="text-sm font-medium text-slate-700">Two-Pass Encoding</span>
+                            <p className="text-xs text-slate-400">
+                              Better quality/size efficiency. Takes ~2x longer.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+                    )}
+                  </>
                 )}
 
-                {/* CRF Quality */}
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Quality (CRF)</span>
-                    <span className="text-sm font-semibold text-slate-700">{config.av1?.crf ?? 28}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={18}
-                    max={45}
-                    value={config.av1?.crf ?? 28}
-                    onChange={(e) => handleAv1Change('crf', Number(e.target.value))}
-                    className="mt-2 w-full accent-slate-900"
-                  />
-                  <div className="mt-1 flex justify-between text-[10px] text-slate-400">
-                    <span>Higher quality</span>
-                    <span>Smaller file</span>
-                  </div>
-                </div>
+                {/* H.265-specific settings */}
+                {config.codec === 'h265' && (
+                  <>
+                    {/* H.265 Preset */}
+                    <label className="block">
+                      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">H.265 Preset</span>
+                      <select
+                        value={config.h265?.preset ?? 'medium'}
+                        onChange={(e) => handleH265Change('preset', e.target.value as PartialConfig['h265'] extends { preset: infer P } ? P : never)}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        {H265_PRESET_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                    </label>
 
-                {/* Preset Speed */}
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Speed Preset</span>
-                    <span className="text-sm font-semibold text-slate-700">{config.av1?.preset ?? 6}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={12}
-                    value={config.av1?.preset ?? 6}
-                    onChange={(e) => handleAv1Change('preset', Number(e.target.value))}
-                    className="mt-2 w-full accent-slate-900"
-                  />
-                  <div className="mt-1 flex justify-between text-[10px] text-slate-400">
-                    <span>Slower (better)</span>
-                    <span>Faster</span>
-                  </div>
-                </div>
+                    {/* H.265 CRF Quality */}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Quality (CRF)</span>
+                        <span className="text-sm font-semibold text-slate-700">{config.h265?.crf ?? 23}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={18}
+                        max={35}
+                        value={config.h265?.crf ?? 23}
+                        onChange={(e) => handleH265Change('crf', Number(e.target.value))}
+                        className="mt-2 w-full accent-slate-900"
+                      />
+                      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
+                        <span>Higher quality (18-22)</span>
+                        <span>Smaller file (28+)</span>
+                      </div>
+                      {/* CRF quick presets */}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {[
+                          { value: 20, label: 'High', desc: 'Near lossless' },
+                          { value: 23, label: 'Recommended', desc: 'Best balance' },
+                          { value: 26, label: 'Medium', desc: 'Good quality' },
+                          { value: 28, label: 'Small', desc: 'Web optimized' }
+                        ].map((preset) => (
+                          <button
+                            key={preset.value}
+                            type="button"
+                            onClick={() => handleH265Change('crf', preset.value)}
+                            className={`rounded px-2 py-1 text-[10px] transition ${
+                              config.h265?.crf === preset.value
+                                ? 'bg-slate-700 text-white'
+                                : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                            }`}
+                            title={preset.desc}
+                          >
+                            {preset.label} ({preset.value})
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-[10px] text-slate-400">
+                        <strong>Tip:</strong> CRF 23 is ideal for web delivery. Use 20-22 for high quality archival, 26-28 for smaller files.
+                      </p>
+                    </div>
 
-                {/* Film Grain Synthesis */}
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Film Grain</span>
-                    <span className="text-sm font-semibold text-slate-700">
-                      {config.av1?.filmGrainSynthesis === 0 ? 'Off' : config.av1?.filmGrainSynthesis ?? 10}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={20}
-                    value={config.av1?.filmGrainSynthesis ?? 10}
-                    onChange={(e) => handleAv1Change('filmGrainSynthesis', Number(e.target.value))}
-                    className="mt-2 w-full accent-slate-900"
-                  />
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    Synthesizes grain for better compression. Disable (0) for screen recordings.
-                  </p>
-                </div>
+                    {/* H.265 Tune */}
+                    <label className="block">
+                      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Tune (optional)</span>
+                      <select
+                        value={config.h265?.tune ?? ''}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          // Convert empty string to undefined
+                          handleH265Change('tune', value === '' ? undefined : value as 'film' | 'animation' | 'grain' | 'fastdecode' | 'zerolatency')
+                        }}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="">None (default)</option>
+                        <option value="film">Film - preserves grain</option>
+                        <option value="animation">Animation - better for cartoons</option>
+                        <option value="grain">Grain - heavy grain preservation</option>
+                        <option value="fastdecode">Fast Decode - simpler decode</option>
+                      </select>
+                    </label>
+
+                    {/* B-frames */}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">B-frames</span>
+                        <span className="text-sm font-semibold text-slate-700">{config.h265?.bframes ?? 4}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={8}
+                        value={config.h265?.bframes ?? 4}
+                        onChange={(e) => handleH265Change('bframes', Number(e.target.value))}
+                        className="mt-2 w-full accent-slate-900"
+                      />
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        More B-frames = better compression. 4 recommended for web.
+                      </p>
+                    </div>
+
+                    {/* Two-Pass Encoding */}
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                      <label className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={config.h265?.twoPass ?? false}
+                          onChange={(e) => handleH265Change('twoPass', e.target.checked)}
+                          className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-slate-700">Two-Pass Encoding</span>
+                          <p className="text-xs text-slate-400">
+                            Better quality/size efficiency. Takes ~2x longer.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -919,7 +1220,7 @@ export default function Archive(): JSX.Element {
               Calculating...
             </div>
           ) : batchInfo ? (
-            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
               {/* Total Duration */}
               <div className="rounded-lg bg-slate-50 px-3 py-2">
                 <p className="text-xs text-slate-400">Total Duration</p>
@@ -927,6 +1228,34 @@ export default function Archive(): JSX.Element {
                   {batchInfo.totalDurationSeconds
                     ? formatDuration(batchInfo.totalDurationSeconds)
                     : '--'}
+                </p>
+              </div>
+              {/* Estimated Encoding Time */}
+              <div className="rounded-lg bg-blue-50 px-3 py-2">
+                <p className="text-xs text-blue-500">Est. Encoding Time</p>
+                <p className="text-sm font-semibold text-blue-700">
+                  {batchInfo.totalDurationSeconds ? (() => {
+                    const codec = config.codec ?? 'av1'
+                    const preset = codec === 'h265'
+                      ? (config.h265?.preset ?? 'medium')
+                      : (config.av1?.preset ?? 6)
+                    const encoder = codec === 'h265'
+                      ? 'libx265' as H265Encoder
+                      : (config.av1?.encoder ?? 'libsvtav1') as Av1Encoder
+                    const resolution = (config.resolution ?? 'source') as ArchivalResolution
+                    const twoPass = codec === 'h265'
+                      ? (config.h265?.twoPass ?? false)
+                      : (config.av1?.encoder === 'libaom-av1' && config.av1?.twoPass)
+                    const estimate = estimateEncodingTime(
+                      batchInfo.totalDurationSeconds,
+                      codec,
+                      preset,
+                      encoder,
+                      resolution,
+                      twoPass ?? false
+                    )
+                    return formatEstimatedTime(estimate.estimatedSeconds)
+                  })() : '--'}
                 </p>
               </div>
               {/* Input Size */}
@@ -1012,7 +1341,12 @@ export default function Archive(): JSX.Element {
             <button
               type="button"
               onClick={() => void handleStartBatch()}
-              disabled={isStarting || inputPaths.length === 0 || !outputDir || !encoderInfo?.hasAv1Support}
+              disabled={
+                isStarting ||
+                inputPaths.length === 0 ||
+                !outputDir ||
+                (config.codec === 'h265' ? !encoderInfo?.hasH265Support : !encoderInfo?.hasAv1Support)
+              }
               className="rounded-full bg-white px-6 py-2 text-sm font-semibold uppercase tracking-wide text-slate-900 disabled:opacity-50"
             >
               {isStarting ? 'Starting...' : 'Start Encoding'}
@@ -1076,7 +1410,7 @@ export default function Archive(): JSX.Element {
 
           {/* Batch stats summary */}
           {currentJob.status === 'running' && (
-            <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3">
+            <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 sm:grid-cols-4">
               <div className="text-center">
                 <p className="text-xs text-slate-400">Speed</p>
                 <p className="text-sm font-semibold text-slate-700">
@@ -1094,6 +1428,44 @@ export default function Archive(): JSX.Element {
                 <p className="text-sm font-semibold text-slate-700">
                   {currentJob.totalItems - currentJob.completedItems - currentJob.failedItems - currentJob.skippedItems} files
                 </p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-slate-400">Output Size</p>
+                <p className="text-sm font-semibold text-emerald-600">
+                  {currentJob.actualOutputBytes ? formatFileSize(currentJob.actualOutputBytes) : '--'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Completed batch summary */}
+          {currentJob.status === 'completed' && currentJob.actualOutputBytes !== undefined && (
+            <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50 p-3">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div className="text-center">
+                  <p className="text-xs text-emerald-600">Completed</p>
+                  <p className="text-sm font-semibold text-emerald-700">
+                    {currentJob.completedItems} / {currentJob.totalItems}
+                  </p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-emerald-600">Total Output</p>
+                  <p className="text-sm font-semibold text-emerald-700">
+                    {formatFileSize(currentJob.actualOutputBytes)}
+                  </p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-emerald-600">Skipped</p>
+                  <p className="text-sm font-semibold text-emerald-700">
+                    {currentJob.skippedItems}
+                  </p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-emerald-600">Failed</p>
+                  <p className={`text-sm font-semibold ${currentJob.failedItems > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                    {currentJob.failedItems}
+                  </p>
+                </div>
               </div>
             </div>
           )}

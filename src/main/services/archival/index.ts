@@ -1,8 +1,11 @@
 export { ArchivalService, type ArchivalEventHandler } from './archival.service'
 export {
   buildArchivalFFmpegArgs,
+  buildTwoPassArgs,
+  isTwoPassEnabled,
   describeArchivalSettings,
-  estimateArchivalFileSize
+  estimateArchivalFileSize,
+  type TwoPassArgs
 } from './archival-command-builder'
 export {
   detectAv1Encoders,

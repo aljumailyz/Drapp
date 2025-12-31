@@ -174,11 +174,24 @@ export function getBitrateAdjustedCrf(
 }
 
 /**
+ * Video codec type for archival encoding
+ * - av1: Best compression, ideal for long-term archival storage
+ * - h265: HEVC, better compatibility for web delivery and playback
+ */
+export type ArchivalCodec = 'av1' | 'h265'
+
+/**
  * AV1 encoder type
  * - libaom-av1: Higher quality, slower (default, widely available)
  * - libsvtav1: Faster encoding, slightly lower quality (if available)
  */
 export type Av1Encoder = 'libaom-av1' | 'libsvtav1'
+
+/**
+ * H.265 (HEVC) encoder type
+ * - libx265: Software encoder, widely available, good quality
+ */
+export type H265Encoder = 'libx265'
 
 /**
  * AV1 encoding options
@@ -213,6 +226,44 @@ export interface Av1Options {
 
   // CRF value (0-63, lower = higher quality)
   crf: number
+
+  // Two-pass encoding for better quality/size efficiency
+  // Takes longer but provides more consistent quality across the video
+  twoPass?: boolean
+}
+
+/**
+ * H.265 (HEVC) encoding options
+ * Optimized for web delivery with broad compatibility
+ */
+export interface H265Options {
+  // Encoder to use (libx265 is the standard software encoder)
+  encoder: H265Encoder
+
+  // Preset speed (ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
+  // For archival/web delivery, 'medium' to 'slow' is recommended
+  preset: 'ultrafast' | 'superfast' | 'veryfast' | 'faster' | 'fast' | 'medium' | 'slow' | 'slower' | 'veryslow'
+
+  // Tune for specific content types
+  // - none: Default, good for general content
+  // - film: Optimized for film grain preservation
+  // - animation: Better for animated content
+  // - grain: Preserves film grain
+  tune?: 'film' | 'animation' | 'grain' | 'fastdecode' | 'zerolatency'
+
+  // CRF value (0-51, lower = higher quality)
+  // 18-23 is considered visually lossless, 23-28 is good quality
+  crf: number
+
+  // Keyframe interval (GOP size) - max frames between keyframes
+  keyframeInterval: number
+
+  // Enable B-frames for better compression (default: enabled)
+  bframes: number
+
+  // Two-pass encoding for better quality/size efficiency
+  // Takes longer but provides more consistent quality across the video
+  twoPass?: boolean
 }
 
 /**
@@ -223,8 +274,14 @@ export interface ArchivalEncodingConfig {
   resolution: ArchivalResolution
   colorMode: ArchivalColorMode
 
+  // Codec selection - AV1 for maximum compression, H.265 for web compatibility
+  codec: ArchivalCodec
+
   // AV1 encoder settings (supports libaom-av1 and libsvtav1)
   av1: Av1Options
+
+  // H.265 encoder settings (for web delivery)
+  h265: H265Options
 
   // Audio settings - copy by default to preserve quality
   audioCopy: boolean
@@ -269,6 +326,8 @@ export const DEFAULT_ARCHIVAL_CONFIG: Omit<ArchivalEncodingConfig, 'outputDir'> 
   resolution: 'source',
   colorMode: 'auto',
 
+  codec: 'av1', // Default to AV1 for best compression
+
   av1: {
     encoder: 'libsvtav1', // Faster than libaom with excellent quality
     preset: 6, // SVT-AV1: 0-13, lower=slower/better. 6 is balanced
@@ -277,11 +336,21 @@ export const DEFAULT_ARCHIVAL_CONFIG: Omit<ArchivalEncodingConfig, 'outputDir'> 
     filmGrainSynthesis: 10, // Helps with noisy footage, disable for screen recordings
     tune: 0, // VQ (visual quality) - best for archival viewing
     adaptiveQuantization: true, // Better detail in complex areas
-    crf: 30 // Will be auto-adjusted based on resolution/HDR
+    crf: 30, // Will be auto-adjusted based on resolution/HDR
+    twoPass: false // Single-pass by default for faster encoding
+  },
+
+  h265: {
+    encoder: 'libx265',
+    preset: 'medium', // Balanced speed/quality for web delivery
+    crf: 23, // Visually transparent for most content
+    keyframeInterval: 250, // ~10 seconds, good for streaming
+    bframes: 4, // Standard B-frame count for good compression
+    twoPass: false // Single-pass by default for faster encoding
   },
 
   audioCopy: true, // Preserve original audio losslessly
-  audioCodec: 'opus', // Fallback if copy fails
+  audioCodec: 'aac', // AAC is best for H.265/MP4 web delivery
   audioBitrate: 160, // 160kbps for music, 128k for speech
 
   container: 'mkv', // Best for AV1 + various audio formats
@@ -301,7 +370,14 @@ export const ARCHIVAL_PRESETS: Record<ArchivalPreset, Partial<Omit<ArchivalEncod
     av1: {
       ...DEFAULT_ARCHIVAL_CONFIG.av1,
       preset: 6,
-      filmGrainSynthesis: 10
+      filmGrainSynthesis: 10,
+      twoPass: false
+    },
+    h265: {
+      ...DEFAULT_ARCHIVAL_CONFIG.h265,
+      preset: 'medium',
+      crf: 23,
+      twoPass: false
     }
   },
 
@@ -310,7 +386,14 @@ export const ARCHIVAL_PRESETS: Record<ArchivalPreset, Partial<Omit<ArchivalEncod
     av1: {
       ...DEFAULT_ARCHIVAL_CONFIG.av1,
       preset: 4, // Slower, better compression
-      filmGrainSynthesis: 12 // More aggressive grain synthesis
+      filmGrainSynthesis: 12, // More aggressive grain synthesis
+      twoPass: false
+    },
+    h265: {
+      ...DEFAULT_ARCHIVAL_CONFIG.h265,
+      preset: 'slow', // Slower for better compression
+      crf: 24, // Slightly higher CRF for smaller files
+      twoPass: false
     }
   },
 
@@ -319,7 +402,14 @@ export const ARCHIVAL_PRESETS: Record<ArchivalPreset, Partial<Omit<ArchivalEncod
     av1: {
       ...DEFAULT_ARCHIVAL_CONFIG.av1,
       preset: 8, // Faster
-      filmGrainSynthesis: 8
+      filmGrainSynthesis: 8,
+      twoPass: false
+    },
+    h265: {
+      ...DEFAULT_ARCHIVAL_CONFIG.h265,
+      preset: 'fast', // Faster encoding
+      crf: 22, // Lower CRF to compensate for speed
+      twoPass: false
     }
   }
 }
@@ -671,4 +761,148 @@ export function formatEta(seconds: number): string {
 export function formatSpeed(speed: number): string {
   if (!isFinite(speed) || speed <= 0) return '--'
   return `${speed.toFixed(1)}x`
+}
+
+/**
+ * Encoding speed multipliers for different codecs and presets
+ * These are approximate values based on typical encoding performance
+ * Speed is relative to realtime (1.0x = encodes as fast as playback)
+ *
+ * Factors affecting speed:
+ * - Codec: H.265 is generally faster than AV1
+ * - Preset: Faster presets = higher speed multiplier
+ * - Resolution: Higher resolution = slower encoding (normalized in estimateEncodingTime)
+ * - Two-pass: Approximately doubles encoding time
+ */
+const ENCODING_SPEED_MULTIPLIERS = {
+  // AV1 SVT speed multipliers by preset (0-12)
+  // Based on typical 1080p encoding speeds
+  av1_svt: {
+    0: 0.05,  // Very slow
+    1: 0.08,
+    2: 0.12,
+    3: 0.18,
+    4: 0.25,
+    5: 0.35,
+    6: 0.5,   // Default balanced
+    7: 0.7,
+    8: 1.0,
+    9: 1.4,
+    10: 2.0,
+    11: 2.8,
+    12: 4.0   // Very fast
+  } as Record<number, number>,
+
+  // AV1 libaom speed multipliers by preset (0-8)
+  av1_libaom: {
+    0: 0.02,  // Extremely slow
+    1: 0.04,
+    2: 0.07,
+    3: 0.12,
+    4: 0.2,
+    5: 0.3,
+    6: 0.45,
+    7: 0.65,
+    8: 0.9
+  } as Record<number, number>,
+
+  // H.265 libx265 speed multipliers by preset
+  h265: {
+    'ultrafast': 5.0,
+    'superfast': 3.5,
+    'veryfast': 2.5,
+    'faster': 1.8,
+    'fast': 1.3,
+    'medium': 0.9,
+    'slow': 0.5,
+    'slower': 0.3,
+    'veryslow': 0.15
+  } as Record<string, number>
+}
+
+/**
+ * Resolution scaling factors for encoding speed
+ * Higher resolutions take proportionally longer to encode
+ */
+const RESOLUTION_SPEED_FACTORS: Record<ArchivalResolution, number> = {
+  '360p': 4.0,    // Much faster
+  '480p': 2.5,
+  '720p': 1.5,
+  '1080p': 1.0,   // Reference baseline
+  '1440p': 0.6,
+  '4k': 0.35,     // Much slower
+  'source': 1.0   // Assume 1080p for source
+}
+
+/**
+ * Estimate encoding time in seconds
+ * Returns an estimate with min/max range
+ *
+ * @param durationSeconds - Total video duration in seconds
+ * @param codec - 'av1' or 'h265'
+ * @param preset - Encoder preset (number for AV1, string for H.265)
+ * @param encoder - 'libsvtav1', 'libaom-av1', or 'libx265'
+ * @param resolution - Target resolution
+ * @param twoPass - Whether two-pass encoding is enabled
+ * @returns Object with estimated, min, and max encoding times in seconds
+ */
+export function estimateEncodingTime(
+  durationSeconds: number,
+  codec: ArchivalCodec,
+  preset: number | string,
+  encoder: Av1Encoder | H265Encoder,
+  resolution: ArchivalResolution = '1080p',
+  twoPass: boolean = false
+): { estimatedSeconds: number; minSeconds: number; maxSeconds: number } {
+  // Get base speed multiplier based on codec and preset
+  let speedMultiplier: number
+
+  if (codec === 'h265') {
+    const presetStr = preset as string
+    speedMultiplier = ENCODING_SPEED_MULTIPLIERS.h265[presetStr] ?? 0.9
+  } else {
+    // AV1
+    const presetNum = preset as number
+    if (encoder === 'libsvtav1') {
+      speedMultiplier = ENCODING_SPEED_MULTIPLIERS.av1_svt[presetNum] ?? 0.5
+    } else {
+      speedMultiplier = ENCODING_SPEED_MULTIPLIERS.av1_libaom[presetNum] ?? 0.2
+    }
+  }
+
+  // Apply resolution factor
+  const resolutionFactor = RESOLUTION_SPEED_FACTORS[resolution] ?? 1.0
+  const adjustedSpeed = speedMultiplier * resolutionFactor
+
+  // Calculate base encoding time
+  // If speed is 0.5x realtime, encoding 60s video takes 120s
+  let encodingTime = durationSeconds / adjustedSpeed
+
+  // Double time for two-pass encoding
+  if (twoPass) {
+    encodingTime *= 2
+  }
+
+  // Add 10% variance for min/max estimates
+  return {
+    estimatedSeconds: Math.round(encodingTime),
+    minSeconds: Math.round(encodingTime * 0.7),
+    maxSeconds: Math.round(encodingTime * 1.5)
+  }
+}
+
+/**
+ * Format estimated encoding time as human-readable string
+ * Returns format like "~2h 30m" or "~45m"
+ */
+export function formatEstimatedTime(seconds: number): string {
+  if (!isFinite(seconds) || seconds <= 0) return '--'
+  if (seconds < 60) return `~${Math.round(seconds)}s`
+  if (seconds < 3600) {
+    const mins = Math.round(seconds / 60)
+    return `~${mins}m`
+  }
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.round((seconds % 3600) / 60)
+  return mins > 0 ? `~${hours}h ${mins}m` : `~${hours}h`
 }

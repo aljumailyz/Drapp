@@ -1,12 +1,14 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, stat, unlink } from 'node:fs/promises'
+import { access, mkdir, rm, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { Logger } from '../../utils/logger'
 import { resolveBundledBinary } from '../../utils/binary'
 import { MetadataService, type MetadataResult } from '../library/metadata.service'
 import {
   buildArchivalFFmpegArgs,
+  buildTwoPassArgs,
+  isTwoPassEnabled,
   describeArchivalSettings,
   estimateArchivalFileSize
 } from './archival-command-builder'
@@ -797,9 +799,251 @@ export class ArchivalService {
   }
 
   /**
-   * Encode video using FFmpeg with SVT-AV1
+   * Encode video using FFmpeg with SVT-AV1 or H.265
+   * Supports both single-pass and two-pass encoding
    */
-  private encodeVideo(item: ArchivalBatchItem, sourceInfo: VideoSourceInfo): Promise<void> {
+  private async encodeVideo(item: ArchivalBatchItem, sourceInfo: VideoSourceInfo): Promise<void> {
+    if (!this.activeJob) {
+      throw new Error('No active job')
+    }
+
+    const config = this.activeJob.config
+
+    // Check if two-pass encoding is enabled
+    if (isTwoPassEnabled(config)) {
+      await this.encodeTwoPass(item, sourceInfo)
+    } else {
+      await this.encodeSinglePass(item, sourceInfo)
+    }
+  }
+
+  /**
+   * Perform two-pass encoding
+   */
+  private async encodeTwoPass(item: ArchivalBatchItem, sourceInfo: VideoSourceInfo): Promise<void> {
+    if (!this.activeJob) {
+      throw new Error('No active job')
+    }
+
+    const config = this.activeJob.config
+    const batchId = this.activeJob.id
+
+    // Create temp directory for pass log files
+    const passLogDir = join(dirname(item.outputPath), '.pass-logs')
+    await mkdir(passLogDir, { recursive: true })
+
+    try {
+      // Build two-pass arguments
+      const twoPassArgs = buildTwoPassArgs(
+        item.inputPath,
+        item.outputPath,
+        config,
+        sourceInfo,
+        passLogDir
+      )
+
+      // ===== PASS 1 =====
+      this.logger.info('Starting two-pass encoding - Pass 1', { input: basename(item.inputPath) })
+
+      // Emit progress event for pass 1
+      this.emitEvent({
+        batchId,
+        itemId: item.id,
+        kind: 'item_progress',
+        progress: 0,
+        status: 'encoding'
+      })
+
+      await this.runFFmpegPass(item, sourceInfo, twoPassArgs.pass1, 1, batchId)
+
+      // Check for cancellation between passes
+      if (this.abortController?.signal.aborted) {
+        throw new Error('Encoding cancelled')
+      }
+
+      // ===== PASS 2 =====
+      this.logger.info('Starting two-pass encoding - Pass 2', { input: basename(item.inputPath) })
+
+      await this.runFFmpegPass(item, sourceInfo, twoPassArgs.pass2, 2, batchId)
+
+    } finally {
+      // Clean up pass log files
+      try {
+        await rm(passLogDir, { recursive: true, force: true })
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
+   * Run a single FFmpeg pass (for two-pass encoding)
+   */
+  private runFFmpegPass(
+    item: ArchivalBatchItem,
+    sourceInfo: VideoSourceInfo,
+    args: string[],
+    passNumber: 1 | 2,
+    batchId: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const ffmpegPath = resolveBundledBinary('ffmpeg')
+
+      // Add progress output
+      const fullArgs = ['-progress', 'pipe:1', '-nostats', ...args]
+
+      // For pass 2, we need to clean up partial output on failure/cancel
+      const isPass2 = passNumber === 2
+      const outputPath = isPass2 ? item.outputPath : null
+
+      this.logger.debug(`Starting FFmpeg pass ${passNumber}`, { args: fullArgs.join(' ') })
+
+      const proc = spawn(ffmpegPath, fullArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+      this.activeProcess = proc
+
+      // Initialize timing
+      const startTime = Date.now()
+      const durationMs = (sourceInfo.duration ?? 0) * 1000
+      const durationSeconds = sourceInfo.duration ?? 0
+      let lastProgressUpdate = 0
+
+      // Parse progress from stdout
+      proc.stdout.on('data', (data: Buffer) => {
+        const lines = data.toString().split('\n')
+        let encodedTimeMs: number | null = null
+
+        for (const line of lines) {
+          if (line.startsWith('out_time_ms=')) {
+            const timeMs = parseInt(line.split('=')[1], 10)
+            if (!isNaN(timeMs)) {
+              encodedTimeMs = timeMs
+            }
+          }
+          if (line.startsWith('out_time=')) {
+            const timeStr = line.split('=')[1]
+            const timeMs = this.parseTimeToMs(timeStr)
+            if (timeMs !== null) {
+              encodedTimeMs = timeMs
+            }
+          }
+        }
+
+        if (encodedTimeMs !== null) {
+          const now = Date.now()
+          const elapsedMs = now - startTime
+          const elapsedSeconds = elapsedMs / 1000
+
+          // Calculate progress for this pass (each pass is 50% of total for two-pass)
+          let passProgress: number
+          if (durationMs > 0) {
+            passProgress = Math.min(99, Math.max(0, Math.round((encodedTimeMs / durationMs) * 100)))
+          } else {
+            passProgress = Math.min(99, Math.round(elapsedSeconds / 60))
+          }
+
+          // Overall progress: pass 1 is 0-50%, pass 2 is 50-100%
+          const overallProgress = passNumber === 1
+            ? Math.round(passProgress / 2)
+            : 50 + Math.round(passProgress / 2)
+
+          // Throttle progress updates
+          if (now - lastProgressUpdate > 500) {
+            lastProgressUpdate = now
+            item.progress = overallProgress
+
+            this.emitEvent({
+              batchId,
+              itemId: item.id,
+              kind: 'item_progress',
+              progress: overallProgress,
+              status: 'encoding',
+              elapsedSeconds
+            })
+          }
+        }
+      })
+
+      // Capture stderr
+      let stderr = ''
+      proc.stderr.on('data', (data: Buffer) => {
+        const chunk = data.toString()
+        stderr += chunk
+        if (stderr.length > 8192) {
+          stderr = stderr.slice(-8192)
+        }
+      })
+
+      proc.on('close', (code) => {
+        this.activeProcess = null
+
+        if (code === 0) {
+          resolve()
+        } else if (this.abortController?.signal.aborted) {
+          // Clean up partial output file on cancel (pass 2 only)
+          if (outputPath) {
+            void this.cleanupPartialOutput(outputPath)
+          }
+          const error = new Error('Encoding cancelled')
+          ;(error as Error & { errorType: ArchivalErrorType }).errorType = 'cancelled'
+          reject(error)
+        } else {
+          // Clean up partial output file on error (pass 2 only)
+          if (outputPath) {
+            void this.cleanupPartialOutput(outputPath)
+          }
+
+          const errorPatterns = [
+            /Error[^\n]*/i,
+            /error[^\n]*/i,
+            /Invalid[^\n]*/i
+          ]
+
+          let errorMsg = `FFmpeg pass ${passNumber} exited with code ${code}`
+          for (const pattern of errorPatterns) {
+            const match = stderr.match(pattern)
+            if (match) {
+              errorMsg = match[0].trim()
+              break
+            }
+          }
+
+          const errorType = classifyError(stderr || errorMsg)
+          const error = new Error(errorMsg)
+          ;(error as Error & { errorType: ArchivalErrorType }).errorType = errorType
+          reject(error)
+        }
+      })
+
+      proc.on('error', (error) => {
+        this.activeProcess = null
+        // Clean up partial output file on error (pass 2 only)
+        if (outputPath) {
+          void this.cleanupPartialOutput(outputPath)
+        }
+        const typedError = error as Error & { errorType?: ArchivalErrorType }
+        typedError.errorType = classifyError(error.message)
+        reject(typedError)
+      })
+
+      // Handle abort signal
+      const abortHandler = (): void => {
+        if (platform() === 'win32') {
+          proc.kill()
+        } else {
+          proc.kill('SIGTERM')
+        }
+      }
+
+      if (this.abortController) {
+        this.abortController.signal.addEventListener('abort', abortHandler, { once: true })
+      }
+    })
+  }
+
+  /**
+   * Perform single-pass encoding (original implementation)
+   */
+  private encodeSinglePass(item: ArchivalBatchItem, sourceInfo: VideoSourceInfo): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.activeJob) {
         reject(new Error('No active job'))
