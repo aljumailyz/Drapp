@@ -273,6 +273,9 @@ function buildH265TwoPassArgs(
 
 /**
  * Build x265-params string with pass information for two-pass encoding
+ *
+ * Note: x265 two-pass with CRF requires VBV settings (vbv-maxrate and vbv-bufsize)
+ * We use "capped CRF" mode which provides consistent quality with bitrate limits
  */
 function buildX265ParamsWithPass(
   options: H265Options,
@@ -285,6 +288,12 @@ function buildX265ParamsWithPass(
   // Pass control
   params.push(`pass=${passNumber}`)
   params.push(`stats=${statsFile}.log`)
+
+  // VBV settings required for two-pass with CRF
+  // Estimate reasonable bitrate based on resolution for "capped CRF" mode
+  const vbvMaxrate = estimateVbvMaxrate(sourceInfo.width, sourceInfo.height, sourceInfo.frameRate)
+  params.push(`vbv-maxrate=${vbvMaxrate}`)
+  params.push(`vbv-bufsize=${vbvMaxrate * 2}`) // Buffer = 2x maxrate for smoother output
 
   // Standard params (same as single-pass)
   params.push(`keyint=${options.keyframeInterval}`)
@@ -309,6 +318,37 @@ function buildX265ParamsWithPass(
   }
 
   return params.join(':')
+}
+
+/**
+ * Estimate VBV maxrate (in kbps) based on resolution and frame rate
+ * These are generous limits that allow CRF to work normally while enabling two-pass
+ */
+function estimateVbvMaxrate(width: number, height: number, frameRate: number): number {
+  const pixels = width * height
+  const fps = frameRate || 30
+
+  // Base bitrates for different resolutions (in kbps)
+  // These are high enough to not constrain CRF quality much
+  let baseBitrate: number
+  if (pixels >= 3840 * 2160) {
+    baseBitrate = 40000 // 4K: 40 Mbps max
+  } else if (pixels >= 2560 * 1440) {
+    baseBitrate = 20000 // 1440p: 20 Mbps max
+  } else if (pixels >= 1920 * 1080) {
+    baseBitrate = 12000 // 1080p: 12 Mbps max
+  } else if (pixels >= 1280 * 720) {
+    baseBitrate = 8000 // 720p: 8 Mbps max
+  } else {
+    baseBitrate = 4000 // SD: 4 Mbps max
+  }
+
+  // Adjust for high frame rate content
+  if (fps > 30) {
+    baseBitrate = Math.round(baseBitrate * (fps / 30))
+  }
+
+  return baseBitrate
 }
 
 /**

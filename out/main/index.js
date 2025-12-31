@@ -5208,6 +5208,8 @@ function getBitrateAdjustedCrf(sourceInfo, baseCrf) {
 const DEFAULT_ARCHIVAL_CONFIG = {
   resolution: "source",
   colorMode: "auto",
+  codec: "av1",
+  // Default to AV1 for best compression
   av1: {
     encoder: "libsvtav1",
     // Faster than libaom with excellent quality
@@ -5223,13 +5225,28 @@ const DEFAULT_ARCHIVAL_CONFIG = {
     // VQ (visual quality) - best for archival viewing
     adaptiveQuantization: true,
     // Better detail in complex areas
-    crf: 30
+    crf: 30,
     // Will be auto-adjusted based on resolution/HDR
+    twoPass: false
+    // Single-pass by default for faster encoding
+  },
+  h265: {
+    encoder: "libx265",
+    preset: "medium",
+    // Balanced speed/quality for web delivery
+    crf: 23,
+    // Visually transparent for most content
+    keyframeInterval: 250,
+    // ~10 seconds, good for streaming
+    bframes: 4,
+    // Standard B-frame count for good compression
+    twoPass: false
+    // Single-pass by default for faster encoding
   },
   audioCopy: true,
   // Preserve original audio losslessly
-  audioCodec: "opus",
-  // Fallback if copy fails
+  audioCodec: "aac",
+  // AAC is best for H.265/MP4 web delivery
   audioBitrate: 160,
   // 160kbps for music, 128k for speech
   container: "mkv",
@@ -5238,26 +5255,37 @@ const DEFAULT_ARCHIVAL_CONFIG = {
   overwriteExisting: false,
   deleteOriginal: false,
   // Safety: never auto-delete originals
-  deleteOutputIfLarger: true
+  deleteOutputIfLarger: true,
   // Smart: delete output if it's larger than original
+  extractThumbnail: false
+  // Disabled by default
 };
 ({
   // Recommended: Good balance of quality and speed
   archive: {
     av1: {
       ...DEFAULT_ARCHIVAL_CONFIG.av1
+    },
+    h265: {
+      ...DEFAULT_ARCHIVAL_CONFIG.h265
     }
   },
   // Maximum compression: Slower but smaller files (~3-5% smaller)
   "max-compression": {
     av1: {
       ...DEFAULT_ARCHIVAL_CONFIG.av1
+    },
+    h265: {
+      ...DEFAULT_ARCHIVAL_CONFIG.h265
     }
   },
   // Fast: Faster encoding, slightly larger files
   fast: {
     av1: {
       ...DEFAULT_ARCHIVAL_CONFIG.av1
+    },
+    h265: {
+      ...DEFAULT_ARCHIVAL_CONFIG.h265
     }
   }
 });
@@ -5330,6 +5358,165 @@ function classifyError(errorMessage2) {
   return "unknown";
 }
 function buildArchivalFFmpegArgs(inputPath, outputPath, config, sourceInfo) {
+  if (config.codec === "h265") {
+    return buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo);
+  }
+  return buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo);
+}
+function isTwoPassEnabled(config) {
+  if (config.codec === "h265") {
+    return config.h265.twoPass === true;
+  }
+  if (config.av1.encoder === "libaom-av1") {
+    return config.av1.twoPass === true;
+  }
+  return false;
+}
+function buildTwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogDir) {
+  const { basename: basename2, join: join2 } = require2("node:path");
+  const inputName = basename2(inputPath, require2("node:path").extname(inputPath));
+  const passLogFile = join2(passLogDir, `${inputName}-pass`);
+  if (config.codec === "h265") {
+    return buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile);
+  }
+  return buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile);
+}
+function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile) {
+  const options = config.av1;
+  const encoder = options.encoder;
+  const effectiveCrf = options.crf !== 30 ? options.crf : getOptimalCrf(sourceInfo);
+  const pass1 = [];
+  pass1.push("-i", inputPath);
+  pass1.push("-c:v", encoder);
+  pass1.push("-crf", effectiveCrf.toString());
+  if (encoder === "libaom-av1") {
+    pass1.push("-cpu-used", options.preset.toString());
+    pass1.push(...buildLibaomParams(options, sourceInfo));
+    pass1.push("-pass", "1");
+    pass1.push("-passlogfile", passLogFile);
+  }
+  if (sourceInfo.isHdr) {
+    pass1.push(...buildHdrArgs(sourceInfo));
+  } else {
+    pass1.push("-pix_fmt", "yuv420p");
+  }
+  pass1.push("-an");
+  pass1.push("-f", "null");
+  pass1.push("-y");
+  pass1.push(process.platform === "win32" ? "NUL" : "/dev/null");
+  const pass2 = [];
+  pass2.push("-i", inputPath);
+  pass2.push("-c:v", encoder);
+  pass2.push("-crf", effectiveCrf.toString());
+  if (encoder === "libaom-av1") {
+    pass2.push("-cpu-used", options.preset.toString());
+    pass2.push(...buildLibaomParams(options, sourceInfo));
+    pass2.push("-pass", "2");
+    pass2.push("-passlogfile", passLogFile);
+  }
+  if (sourceInfo.isHdr) {
+    pass2.push(...buildHdrArgs(sourceInfo));
+  } else {
+    pass2.push("-pix_fmt", "yuv420p");
+  }
+  const needsWebmAudioReencode = config.container === "webm" && config.audioCopy && !isWebmCompatibleAudio(sourceInfo.audioCodec);
+  if (needsWebmAudioReencode) {
+    pass2.push("-c:a", "libopus");
+    pass2.push("-b:a", `${config.audioBitrate ?? 128}k`);
+    pass2.push("-ar", "48000");
+  } else if (config.audioCopy) {
+    pass2.push("-c:a", "copy");
+  } else {
+    pass2.push(...buildAudioArgs(config));
+  }
+  pass2.push("-map", "0:v:0");
+  pass2.push("-map", "0:a?");
+  if (config.container === "mp4") {
+    pass2.push("-movflags", "+faststart");
+  }
+  pass2.push("-y");
+  pass2.push(outputPath);
+  return { pass1, pass2, passLogFile };
+}
+function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile) {
+  const options = config.h265;
+  const pass1 = [];
+  pass1.push("-i", inputPath);
+  pass1.push("-c:v", options.encoder);
+  pass1.push("-crf", options.crf.toString());
+  pass1.push("-preset", options.preset);
+  const x265ParamsPass1 = buildX265ParamsWithPass(options, sourceInfo, 1, passLogFile);
+  if (x265ParamsPass1) {
+    pass1.push("-x265-params", x265ParamsPass1);
+  }
+  if (options.tune) {
+    pass1.push("-tune", options.tune);
+  }
+  if (sourceInfo.isHdr) {
+    pass1.push(...buildHdrArgsH265(sourceInfo));
+  } else {
+    pass1.push("-pix_fmt", "yuv420p");
+  }
+  pass1.push("-an");
+  pass1.push("-f", "null");
+  pass1.push("-y");
+  pass1.push(process.platform === "win32" ? "NUL" : "/dev/null");
+  const pass2 = [];
+  pass2.push("-i", inputPath);
+  pass2.push("-c:v", options.encoder);
+  pass2.push("-crf", options.crf.toString());
+  pass2.push("-preset", options.preset);
+  const x265ParamsPass2 = buildX265ParamsWithPass(options, sourceInfo, 2, passLogFile);
+  if (x265ParamsPass2) {
+    pass2.push("-x265-params", x265ParamsPass2);
+  }
+  if (options.tune) {
+    pass2.push("-tune", options.tune);
+  }
+  if (sourceInfo.isHdr) {
+    pass2.push(...buildHdrArgsH265(sourceInfo));
+  } else {
+    pass2.push("-pix_fmt", "yuv420p");
+  }
+  if (config.audioCopy) {
+    pass2.push("-c:a", "copy");
+  } else {
+    pass2.push(...buildAudioArgs(config));
+  }
+  pass2.push("-map", "0:v:0");
+  pass2.push("-map", "0:a?");
+  if (config.container === "mp4") {
+    pass2.push("-movflags", "+faststart");
+    pass2.push("-tag:v", "hvc1");
+  }
+  pass2.push("-y");
+  pass2.push(outputPath);
+  return { pass1, pass2, passLogFile };
+}
+function buildX265ParamsWithPass(options, sourceInfo, passNumber, statsFile) {
+  const params = [];
+  params.push(`pass=${passNumber}`);
+  params.push(`stats=${statsFile}.log`);
+  params.push(`keyint=${options.keyframeInterval}`);
+  params.push(`min-keyint=${Math.min(options.keyframeInterval, 25)}`);
+  params.push(`bframes=${options.bframes}`);
+  params.push("scenecut=40");
+  params.push("ref=4");
+  params.push("rc-lookahead=40");
+  params.push("sao=1");
+  if (sourceInfo.isHdr) {
+    params.push("hdr10=1");
+    params.push("hdr10-opt=1");
+  }
+  params.push("aq-mode=3");
+  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
+    params.push("level-idc=51");
+  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
+    params.push("level-idc=41");
+  }
+  return params.join(":");
+}
+function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   const args = [];
   args.push("-i", inputPath);
   const encoder = config.av1.encoder;
@@ -5365,6 +5552,41 @@ function buildArchivalFFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   args.push("-map", "0:a?");
   if (config.container === "mp4") {
     args.push("-movflags", "+faststart");
+  }
+  args.push("-y");
+  args.push(outputPath);
+  return args;
+}
+function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
+  const args = [];
+  args.push("-i", inputPath);
+  args.push("-c:v", config.h265.encoder);
+  args.push("-crf", config.h265.crf.toString());
+  args.push("-preset", config.h265.preset);
+  const x265Params = buildX265Params(config.h265, sourceInfo);
+  if (x265Params) {
+    args.push("-x265-params", x265Params);
+  }
+  if (config.h265.tune) {
+    args.push("-tune", config.h265.tune);
+  }
+  if (sourceInfo.isHdr) {
+    args.push(...buildHdrArgsH265(sourceInfo));
+  } else {
+    args.push("-pix_fmt", "yuv420p");
+  }
+  if (config.audioCopy) {
+    args.push("-c:a", "copy");
+  } else {
+    args.push(...buildAudioArgs(config));
+  }
+  args.push("-map", "0:v:0");
+  args.push("-map", "0:a?");
+  if (config.container === "mp4") {
+    args.push("-movflags", "+faststart");
+  }
+  if (config.container === "mp4") {
+    args.push("-tag:v", "hvc1");
   }
   args.push("-y");
   args.push(outputPath);
@@ -5418,6 +5640,48 @@ function buildSvtAv1Params(options, sourceInfo) {
   params.push("fast-decode=0");
   params.push("enable-tf=1");
   return params.join(":");
+}
+function buildX265Params(options, sourceInfo) {
+  const params = [];
+  params.push(`keyint=${options.keyframeInterval}`);
+  params.push(`min-keyint=${Math.min(options.keyframeInterval, 25)}`);
+  params.push(`bframes=${options.bframes}`);
+  params.push("scenecut=40");
+  params.push("ref=4");
+  params.push("rc-lookahead=40");
+  params.push("sao=1");
+  if (sourceInfo.isHdr) {
+    params.push("hdr10=1");
+    params.push("hdr10-opt=1");
+  }
+  params.push("aq-mode=3");
+  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
+    params.push("level-idc=51");
+  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
+    params.push("level-idc=41");
+  }
+  return params.join(":");
+}
+function buildHdrArgsH265(sourceInfo) {
+  const args = [];
+  args.push("-pix_fmt", "yuv420p10le");
+  if (sourceInfo.colorSpace) {
+    const colorParams = parseColorSpace(sourceInfo.colorSpace);
+    if (colorParams.primaries) {
+      args.push("-color_primaries", colorParams.primaries);
+    }
+    if (colorParams.transfer) {
+      args.push("-color_trc", colorParams.transfer);
+    }
+    if (colorParams.matrix) {
+      args.push("-colorspace", colorParams.matrix);
+    }
+  } else {
+    args.push("-color_primaries", "bt2020");
+    args.push("-color_trc", "smpte2084");
+    args.push("-colorspace", "bt2020nc");
+  }
+  return args;
 }
 function buildHdrArgs(sourceInfo) {
   const args = [];
@@ -5499,23 +5763,43 @@ function buildAudioArgs(config) {
 }
 function describeArchivalSettings(config, sourceInfo) {
   const lines = [];
-  const encoder = config.av1.encoder;
-  const encoderName = encoder === "libsvtav1" ? "SVT-AV1 (libsvtav1)" : "libaom-av1";
-  lines.push(`Encoder: ${encoderName}`);
-  lines.push(`Preset: ${config.av1.preset} (${describePreset(config.av1.preset, encoder)})`);
-  if (sourceInfo) {
-    const effectiveCrf = getOptimalCrf(sourceInfo);
-    const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
-    lines.push(`Resolution: ${sourceInfo.width}x${sourceInfo.height} (${resolution})`);
-    lines.push(`CRF: ${effectiveCrf} (${sourceInfo.isHdr ? "HDR" : "SDR"} profile)`);
-    lines.push(`Frame Rate: ${sourceInfo.frameRate.toFixed(2)} fps`);
-    lines.push(`Color: ${sourceInfo.isHdr ? "HDR (10-bit)" : "SDR (8-bit)"}`);
+  lines.push(`Codec: ${config.codec === "h265" ? "H.265/HEVC" : "AV1"}`);
+  if (config.codec === "h265") {
+    lines.push(`Encoder: libx265`);
+    lines.push(`Preset: ${config.h265.preset}`);
+    if (sourceInfo) {
+      const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
+      lines.push(`Resolution: ${sourceInfo.width}x${sourceInfo.height} (${resolution})`);
+      lines.push(`CRF: ${config.h265.crf}`);
+      lines.push(`Frame Rate: ${sourceInfo.frameRate.toFixed(2)} fps`);
+      lines.push(`Color: ${sourceInfo.isHdr ? "HDR (10-bit)" : "SDR (8-bit)"}`);
+    } else {
+      lines.push(`CRF: ${config.h265.crf}`);
+    }
+    lines.push(`GOP Size: ${config.h265.keyframeInterval} frames`);
+    lines.push(`B-frames: ${config.h265.bframes}`);
+    if (config.h265.tune) {
+      lines.push(`Tune: ${config.h265.tune}`);
+    }
   } else {
-    lines.push(`CRF: ${config.av1.crf} (auto-adjusted per video)`);
-  }
-  lines.push(`GOP Size: ${config.av1.keyframeInterval} frames (scene-aware)`);
-  if (encoder === "libsvtav1") {
-    lines.push(`Film Grain: ${config.av1.filmGrainSynthesis > 0 ? `Level ${config.av1.filmGrainSynthesis}` : "Disabled"}`);
+    const encoder = config.av1.encoder;
+    const encoderName = encoder === "libsvtav1" ? "SVT-AV1 (libsvtav1)" : "libaom-av1";
+    lines.push(`Encoder: ${encoderName}`);
+    lines.push(`Preset: ${config.av1.preset} (${describePreset(config.av1.preset, encoder)})`);
+    if (sourceInfo) {
+      const effectiveCrf = getOptimalCrf(sourceInfo);
+      const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
+      lines.push(`Resolution: ${sourceInfo.width}x${sourceInfo.height} (${resolution})`);
+      lines.push(`CRF: ${effectiveCrf} (${sourceInfo.isHdr ? "HDR" : "SDR"} profile)`);
+      lines.push(`Frame Rate: ${sourceInfo.frameRate.toFixed(2)} fps`);
+      lines.push(`Color: ${sourceInfo.isHdr ? "HDR (10-bit)" : "SDR (8-bit)"}`);
+    } else {
+      lines.push(`CRF: ${config.av1.crf} (auto-adjusted per video)`);
+    }
+    lines.push(`GOP Size: ${config.av1.keyframeInterval} frames (scene-aware)`);
+    if (encoder === "libsvtav1") {
+      lines.push(`Film Grain: ${config.av1.filmGrainSynthesis > 0 ? `Level ${config.av1.filmGrainSynthesis}` : "Disabled"}`);
+    }
   }
   let audioDesc;
   if (config.audioCopy) {
@@ -5576,6 +5860,7 @@ async function detectAv1Encoders() {
   }
   const ffmpegPath = resolveBundledBinary("ffmpeg");
   const available = [];
+  const h265Available = [];
   try {
     const encoders = await getEncoderList(ffmpegPath);
     if (encoders.includes("libaom-av1")) {
@@ -5583,6 +5868,9 @@ async function detectAv1Encoders() {
     }
     if (encoders.includes("libsvtav1")) {
       available.push("libsvtav1");
+    }
+    if (encoders.includes("libx265")) {
+      h265Available.push("libx265");
     }
   } catch {
   }
@@ -5597,6 +5885,8 @@ async function detectAv1Encoders() {
     available,
     recommended,
     hasAv1Support: available.length > 0,
+    h265Available,
+    hasH265Support: h265Available.length > 0,
     canUpgrade
   };
   return cachedEncoderInfo;
@@ -6209,6 +6499,21 @@ class ArchivalService {
           this.activeJob.processedDurationSeconds = (this.activeJob.processedDurationSeconds ?? 0) + sourceInfo.duration;
         }
       }
+      if (this.activeJob.config.extractThumbnail) {
+        try {
+          const thumbnailPath = await this.extractThumbnail(
+            item.outputPath,
+            sourceInfo,
+            this.activeJob.config.thumbnailTimestamp
+          );
+          item.thumbnailPath = thumbnailPath;
+        } catch (thumbnailError) {
+          this.logger.warn("Thumbnail extraction failed, continuing without thumbnail", {
+            input: item.inputPath,
+            error: thumbnailError instanceof Error ? thumbnailError.message : "Unknown error"
+          });
+        }
+      }
       item.status = "completed";
       item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
       item.progress = 100;
@@ -6221,7 +6526,8 @@ class ArchivalService {
         progress: 100,
         status: "completed",
         outputSize: item.outputSize,
-        compressionRatio: item.compressionRatio
+        compressionRatio: item.compressionRatio,
+        thumbnailPath: item.thumbnailPath
       });
       this.logger.info(`Completed archival encoding${warningMsg}`, {
         input: basename(item.inputPath),
@@ -6341,9 +6647,186 @@ class ArchivalService {
     });
   }
   /**
-   * Encode video using FFmpeg with SVT-AV1
+   * Encode video using FFmpeg with SVT-AV1 or H.265
+   * Supports both single-pass and two-pass encoding
    */
-  encodeVideo(item, sourceInfo) {
+  async encodeVideo(item, sourceInfo) {
+    if (!this.activeJob) {
+      throw new Error("No active job");
+    }
+    const config = this.activeJob.config;
+    if (isTwoPassEnabled(config)) {
+      await this.encodeTwoPass(item, sourceInfo);
+    } else {
+      await this.encodeSinglePass(item, sourceInfo);
+    }
+  }
+  /**
+   * Perform two-pass encoding
+   */
+  async encodeTwoPass(item, sourceInfo) {
+    if (!this.activeJob) {
+      throw new Error("No active job");
+    }
+    const config = this.activeJob.config;
+    const batchId = this.activeJob.id;
+    const passLogDir = join(dirname(item.outputPath), ".pass-logs");
+    await mkdir$4(passLogDir, { recursive: true });
+    try {
+      const twoPassArgs = buildTwoPassArgs(
+        item.inputPath,
+        item.outputPath,
+        config,
+        sourceInfo,
+        passLogDir
+      );
+      this.logger.info("Starting two-pass encoding - Pass 1", { input: basename(item.inputPath) });
+      this.emitEvent({
+        batchId,
+        itemId: item.id,
+        kind: "item_progress",
+        progress: 0,
+        status: "encoding"
+      });
+      await this.runFFmpegPass(item, sourceInfo, twoPassArgs.pass1, 1, batchId);
+      if (this.abortController?.signal.aborted) {
+        throw new Error("Encoding cancelled");
+      }
+      this.logger.info("Starting two-pass encoding - Pass 2", { input: basename(item.inputPath) });
+      await this.runFFmpegPass(item, sourceInfo, twoPassArgs.pass2, 2, batchId);
+    } finally {
+      try {
+        await rm(passLogDir, { recursive: true, force: true });
+      } catch {
+      }
+    }
+  }
+  /**
+   * Run a single FFmpeg pass (for two-pass encoding)
+   */
+  runFFmpegPass(item, sourceInfo, args, passNumber, batchId) {
+    return new Promise((resolve, reject) => {
+      const ffmpegPath = resolveBundledBinary("ffmpeg");
+      const fullArgs = ["-progress", "pipe:1", "-nostats", ...args];
+      const isPass2 = passNumber === 2;
+      const outputPath = isPass2 ? item.outputPath : null;
+      this.logger.debug(`Starting FFmpeg pass ${passNumber}`, { args: fullArgs.join(" ") });
+      const proc = spawn(ffmpegPath, fullArgs, { stdio: ["ignore", "pipe", "pipe"] });
+      this.activeProcess = proc;
+      const startTime = Date.now();
+      const durationMs = (sourceInfo.duration ?? 0) * 1e3;
+      sourceInfo.duration ?? 0;
+      let lastProgressUpdate = 0;
+      proc.stdout.on("data", (data) => {
+        const lines = data.toString().split("\n");
+        let encodedTimeMs = null;
+        for (const line of lines) {
+          if (line.startsWith("out_time_ms=")) {
+            const timeMs = parseInt(line.split("=")[1], 10);
+            if (!isNaN(timeMs)) {
+              encodedTimeMs = timeMs;
+            }
+          }
+          if (line.startsWith("out_time=")) {
+            const timeStr = line.split("=")[1];
+            const timeMs = this.parseTimeToMs(timeStr);
+            if (timeMs !== null) {
+              encodedTimeMs = timeMs;
+            }
+          }
+        }
+        if (encodedTimeMs !== null) {
+          const now = Date.now();
+          const elapsedMs = now - startTime;
+          const elapsedSeconds = elapsedMs / 1e3;
+          let passProgress;
+          if (durationMs > 0) {
+            passProgress = Math.min(99, Math.max(0, Math.round(encodedTimeMs / durationMs * 100)));
+          } else {
+            passProgress = Math.min(99, Math.round(elapsedSeconds / 60));
+          }
+          const overallProgress = passNumber === 1 ? Math.round(passProgress / 2) : 50 + Math.round(passProgress / 2);
+          if (now - lastProgressUpdate > 500) {
+            lastProgressUpdate = now;
+            item.progress = overallProgress;
+            this.emitEvent({
+              batchId,
+              itemId: item.id,
+              kind: "item_progress",
+              progress: overallProgress,
+              status: "encoding",
+              elapsedSeconds
+            });
+          }
+        }
+      });
+      let stderr = "";
+      proc.stderr.on("data", (data) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        if (stderr.length > 8192) {
+          stderr = stderr.slice(-8192);
+        }
+      });
+      proc.on("close", (code) => {
+        this.activeProcess = null;
+        if (code === 0) {
+          resolve();
+        } else if (this.abortController?.signal.aborted) {
+          if (outputPath) {
+            void this.cleanupPartialOutput(outputPath);
+          }
+          const error2 = new Error("Encoding cancelled");
+          error2.errorType = "cancelled";
+          reject(error2);
+        } else {
+          if (outputPath) {
+            void this.cleanupPartialOutput(outputPath);
+          }
+          const errorPatterns = [
+            /Error[^\n]*/i,
+            /error[^\n]*/i,
+            /Invalid[^\n]*/i
+          ];
+          let errorMsg = `FFmpeg pass ${passNumber} exited with code ${code}`;
+          for (const pattern of errorPatterns) {
+            const match = stderr.match(pattern);
+            if (match) {
+              errorMsg = match[0].trim();
+              break;
+            }
+          }
+          const errorType = classifyError(stderr || errorMsg);
+          const error2 = new Error(errorMsg);
+          error2.errorType = errorType;
+          reject(error2);
+        }
+      });
+      proc.on("error", (error2) => {
+        this.activeProcess = null;
+        if (outputPath) {
+          void this.cleanupPartialOutput(outputPath);
+        }
+        const typedError = error2;
+        typedError.errorType = classifyError(error2.message);
+        reject(typedError);
+      });
+      const abortHandler = () => {
+        if (platform$1() === "win32") {
+          proc.kill();
+        } else {
+          proc.kill("SIGTERM");
+        }
+      };
+      if (this.abortController) {
+        this.abortController.signal.addEventListener("abort", abortHandler, { once: true });
+      }
+    });
+  }
+  /**
+   * Perform single-pass encoding (original implementation)
+   */
+  encodeSinglePass(item, sourceInfo) {
     return new Promise((resolve, reject) => {
       if (!this.activeJob) {
         reject(new Error("No active job"));
@@ -6614,6 +7097,78 @@ class ArchivalService {
       item.outputPath = outputPath;
       usedPaths.add(outputPath);
     }
+  }
+  /**
+   * Extract a thumbnail from the encoded video
+   */
+  async extractThumbnail(videoPath, sourceInfo, thumbnailTimestamp) {
+    if (this.abortController?.signal.aborted) {
+      throw new Error("Thumbnail extraction cancelled");
+    }
+    const ffmpegPath = resolveBundledBinary("ffmpeg");
+    const duration = sourceInfo.duration ?? 10;
+    let timestampSec;
+    if (thumbnailTimestamp !== void 0) {
+      timestampSec = Math.min(thumbnailTimestamp, Math.max(0, duration - 0.1));
+    } else {
+      timestampSec = Math.min(Math.max(0.5, duration * 0.1), Math.max(0, duration - 0.1));
+    }
+    const videoDir = dirname(videoPath);
+    const videoName = basename(videoPath, extname(videoPath));
+    const thumbnailPath = join(videoDir, `${videoName}.jpg`);
+    return new Promise((resolve, reject) => {
+      const args = [
+        "-ss",
+        String(timestampSec),
+        "-i",
+        videoPath,
+        "-vf",
+        "scale='min(480,iw)':-2",
+        "-vframes",
+        "1",
+        "-q:v",
+        "5",
+        "-y",
+        thumbnailPath
+      ];
+      this.logger.debug("Extracting thumbnail", { videoPath, thumbnailPath, timestampSec });
+      const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+      const abortHandler = () => {
+        proc.kill();
+        void unlink(thumbnailPath).catch(() => {
+        });
+      };
+      this.abortController?.signal.addEventListener("abort", abortHandler, { once: true });
+      proc.on("close", async (code) => {
+        this.abortController?.signal.removeEventListener("abort", abortHandler);
+        if (this.abortController?.signal.aborted) {
+          await unlink(thumbnailPath).catch(() => {
+          });
+          reject(new Error("Thumbnail extraction cancelled"));
+          return;
+        }
+        if (code === 0) {
+          this.logger.info("Thumbnail extracted", { thumbnailPath });
+          resolve(thumbnailPath);
+        } else {
+          await unlink(thumbnailPath).catch(() => {
+          });
+          this.logger.warn("Thumbnail extraction failed", { code, stderr: stderr.slice(-500) });
+          reject(new Error(`Thumbnail extraction failed with code ${code}`));
+        }
+      });
+      proc.on("error", async (error2) => {
+        this.abortController?.signal.removeEventListener("abort", abortHandler);
+        await unlink(thumbnailPath).catch(() => {
+        });
+        this.logger.warn("Thumbnail extraction error", { error: error2.message });
+        reject(error2);
+      });
+    });
   }
   /**
    * Emit progress event
