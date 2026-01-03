@@ -517,6 +517,14 @@ export default function Archive(): JSX.Element {
     setConfig((prev) => ({ ...prev, [key]: value }))
   }, [])
 
+  const handleFillModeChange = useCallback((enabled: boolean) => {
+    setConfig((prev) => ({
+      ...prev,
+      fillMode: enabled,
+      ...(enabled ? { overwriteExisting: false } : {})
+    }))
+  }, [])
+
   const handleAv1Change = useCallback(<K extends keyof NonNullable<PartialConfig['av1']>>(
     key: K,
     value: NonNullable<PartialConfig['av1']>[K]
@@ -1181,9 +1189,27 @@ export default function Archive(): JSX.Element {
                   type="checkbox"
                   checked={config.overwriteExisting ?? false}
                   onChange={(e) => handleConfigChange('overwriteExisting', e.target.checked)}
+                  disabled={config.fillMode ?? false}
+                  className="h-4 w-4 rounded border-slate-300 disabled:opacity-50"
+                />
+                <span className={`text-sm ${config.fillMode ? 'text-slate-400' : 'text-slate-600'}`}>Overwrite existing files</span>
+              </label>
+              {config.fillMode && (
+                <p className="ml-7 text-xs text-slate-400">Fill mode disables overwrite to avoid accidental replacements.</p>
+              )}
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.fillMode ?? false}
+                  onChange={(e) => handleFillModeChange(e.target.checked)}
                   className="h-4 w-4 rounded border-slate-300"
                 />
-                <span className="text-sm text-slate-600">Overwrite existing files</span>
+                <div className="text-sm text-slate-600">
+                  <span>Fill mode</span>
+                  <p className="text-xs text-slate-400">
+                    Skip files that would conflict with existing output names (disables overwrite)
+                  </p>
+                </div>
               </label>
               <label className="flex items-center gap-3">
                 <input
@@ -1312,18 +1338,19 @@ export default function Archive(): JSX.Element {
                 />
                 <span className="text-sm">Delete original after encoding</span>
               </label>
-              <label className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={config.limitedResourceMode ?? false}
-                  onChange={(e) => handleConfigChange('limitedResourceMode', e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300"
-                />
-                <div className="text-sm text-slate-600">
-                  <span>Limited resource mode</span>
-                  <p className="text-xs text-slate-400">Use only 6 threads for lower CPU usage</p>
-                </div>
-              </label>
+              <div>
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Thread limit</span>
+                <select
+                  value={String(config.threadLimit ?? 0)}
+                  onChange={(e) => handleConfigChange('threadLimit', Number(e.target.value) as 0 | 4 | 6)}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="0">No limit (use all threads)</option>
+                  <option value="6">Limit to 6 threads</option>
+                  <option value="4">Limit to 4 threads</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-400">Lower CPU usage at the cost of slower encoding.</p>
+              </div>
             </div>
           </div>
         </section>
@@ -1440,7 +1467,9 @@ export default function Archive(): JSX.Element {
             {batchInfo && batchInfo.existingCount !== undefined && batchInfo.existingCount > 0 && !config.overwriteExisting && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
                 <span className="font-semibold">{batchInfo.existingCount} file{batchInfo.existingCount !== 1 ? 's' : ''} already exist</span>{' '}
-                and will be skipped. Enable "Overwrite existing files" to re-encode them.
+                {config.fillMode
+                  ? 'and will be skipped because Fill mode is enabled.'
+                  : 'and will be skipped. Enable "Overwrite existing files" to re-encode them.'}
               </div>
             )}
           </div>

@@ -297,6 +297,7 @@ export interface ArchivalEncodingConfig {
 
   // Processing
   overwriteExisting: boolean
+  fillMode: boolean // Skip files that would conflict with existing output names
   deleteOriginal: boolean // Dangerous - disabled by default
   deleteOutputIfLarger: boolean // Delete output and keep original if output is larger
 
@@ -309,7 +310,7 @@ export interface ArchivalEncodingConfig {
   captionLanguage?: string // Language code for transcription (e.g., 'en', 'es', 'auto')
 
   // Resource management
-  limitedResourceMode: boolean // Limit to 6 threads for lower CPU usage
+  threadLimit: 0 | 4 | 6 // Limit encoder threads (0 = no limit)
 }
 
 /**
@@ -363,11 +364,12 @@ export const DEFAULT_ARCHIVAL_CONFIG: Omit<ArchivalEncodingConfig, 'outputDir'> 
   container: 'mkv', // Best for AV1 + various audio formats
   preserveStructure: false,
   overwriteExisting: false,
+  fillMode: false,
   deleteOriginal: false, // Safety: never auto-delete originals
   deleteOutputIfLarger: true, // Smart: delete output if it's larger than original
   extractThumbnail: false, // Disabled by default
   extractCaptions: false, // Disabled by default - uses Whisper for transcription
-  limitedResourceMode: false // Use all available threads by default
+  threadLimit: 0 // Use all available threads by default
 }
 
 /**

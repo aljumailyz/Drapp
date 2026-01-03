@@ -106,9 +106,9 @@ function buildAv1TwoPassArgs(
   const pass1: string[] = []
   pass1.push('-i', inputPath)
 
-  // Limit threads in limited resource mode
-  if (config.limitedResourceMode) {
-    pass1.push('-threads', '6')
+  // Apply configured thread limit
+  if (config.threadLimit > 0) {
+    pass1.push('-threads', String(config.threadLimit))
   }
 
   pass1.push('-c:v', encoder)
@@ -140,9 +140,9 @@ function buildAv1TwoPassArgs(
   const pass2: string[] = []
   pass2.push('-i', inputPath)
 
-  // Limit threads in limited resource mode
-  if (config.limitedResourceMode) {
-    pass2.push('-threads', '6')
+  // Apply configured thread limit
+  if (config.threadLimit > 0) {
+    pass2.push('-threads', String(config.threadLimit))
   }
 
   pass2.push('-c:v', encoder)
@@ -208,9 +208,9 @@ function buildH265TwoPassArgs(
   const pass1: string[] = []
   pass1.push('-i', inputPath)
 
-  // Limit threads in limited resource mode
-  if (config.limitedResourceMode) {
-    pass1.push('-threads', '6')
+  // Apply configured thread limit
+  if (config.threadLimit > 0) {
+    pass1.push('-threads', String(config.threadLimit))
   }
 
   pass1.push('-c:v', options.encoder)
@@ -246,9 +246,9 @@ function buildH265TwoPassArgs(
   const pass2: string[] = []
   pass2.push('-i', inputPath)
 
-  // Limit threads in limited resource mode
-  if (config.limitedResourceMode) {
-    pass2.push('-threads', '6')
+  // Apply configured thread limit
+  if (config.threadLimit > 0) {
+    pass2.push('-threads', String(config.threadLimit))
   }
 
   pass2.push('-c:v', options.encoder)
@@ -389,9 +389,9 @@ function buildAv1FFmpegArgs(
   // Input
   args.push('-i', inputPath)
 
-  // Limit threads in limited resource mode
-  if (config.limitedResourceMode) {
-    args.push('-threads', '6')
+  // Apply configured thread limit
+  if (config.threadLimit > 0) {
+    args.push('-threads', String(config.threadLimit))
   }
 
   // Video encoding with selected AV1 encoder
@@ -492,9 +492,9 @@ function buildH265FFmpegArgs(
   // Input
   args.push('-i', inputPath)
 
-  // Limit threads in limited resource mode
-  if (config.limitedResourceMode) {
-    args.push('-threads', '6')
+  // Apply configured thread limit
+  if (config.threadLimit > 0) {
+    args.push('-threads', String(config.threadLimit))
   }
 
   // Video encoding with libx265

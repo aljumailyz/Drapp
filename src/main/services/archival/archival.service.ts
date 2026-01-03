@@ -55,6 +55,7 @@ export class ArchivalService {
   private activeJob: ArchivalBatchJob | null = null
   private activeProcess: ChildProcess | null = null
   private abortController: AbortController | null = null
+  private fillModeSeenOutputs: Set<string> | null = null
 
   // ETA tracking
   private encodingStartTime: number = 0
@@ -290,6 +291,10 @@ export class ArchivalService {
       ...configOverrides,
       outputDir
     }
+    if (config.fillMode) {
+      config.overwriteExisting = false
+    }
+    this.fillModeSeenOutputs = config.fillMode ? new Set<string>() : null
 
     // Auto-detect best encoder if the configured one isn't available
     const bestEncoder = await getBestEncoder(config.av1.encoder)
@@ -321,7 +326,9 @@ export class ArchivalService {
     }))
 
     // Handle duplicate filenames from different directories
-    this.deduplicateOutputPaths(items)
+    if (!config.fillMode) {
+      this.deduplicateOutputPaths(items)
+    }
 
     this.activeJob = {
       id: batchId,
@@ -521,6 +528,7 @@ export class ArchivalService {
     })
 
     this.abortController = null
+    this.fillModeSeenOutputs = null
   }
 
   /**
@@ -540,6 +548,17 @@ export class ArchivalService {
     })
 
     try {
+      if (this.activeJob.config.fillMode) {
+        const shouldSkip = await this.shouldSkipForFillMode(item.outputPath)
+        if (shouldSkip) {
+          this.logger.info('Skipping due to name conflict (fill mode)', {
+            outputPath: item.outputPath
+          })
+          this.markItemSkipped(item)
+          return
+        }
+      }
+
       // Check if input exists
       await access(item.inputPath)
 
@@ -559,8 +578,7 @@ export class ArchivalService {
         try {
           await access(item.outputPath)
           this.logger.info('Skipping existing output', { outputPath: item.outputPath })
-          item.status = 'skipped'
-          this.activeJob.skippedItems++
+          this.markItemSkipped(item)
           return
         } catch {
           // Output doesn't exist, proceed
@@ -1369,6 +1387,58 @@ export class ArchivalService {
         this.abortController.signal.addEventListener('abort', abortHandler, { once: true })
       }
     })
+  }
+
+  /**
+   * Determine whether an item should be skipped in fill mode.
+   * Fill mode avoids output name conflicts by skipping items that would collide.
+   */
+  private async shouldSkipForFillMode(outputPath: string): Promise<boolean> {
+    if (!this.activeJob?.config.fillMode) return false
+
+    if (!this.fillModeSeenOutputs) {
+      this.fillModeSeenOutputs = new Set<string>()
+    }
+
+    const normalizedOutput = this.normalizeOutputPath(outputPath)
+    if (this.fillModeSeenOutputs.has(normalizedOutput)) {
+      return true
+    }
+
+    try {
+      await access(outputPath)
+      this.fillModeSeenOutputs.add(normalizedOutput)
+      return true
+    } catch {
+      // Output doesn't exist, proceed
+    }
+
+    this.fillModeSeenOutputs.add(normalizedOutput)
+    return false
+  }
+
+  /**
+   * Mark an item as skipped and emit a completion event.
+   */
+  private markItemSkipped(item: ArchivalBatchItem): void {
+    if (!this.activeJob) return
+
+    item.status = 'skipped'
+    item.completedAt = new Date().toISOString()
+    this.activeJob.skippedItems++
+
+    this.emitEvent({
+      batchId: this.activeJob.id,
+      itemId: item.id,
+      kind: 'item_complete',
+      progress: 100,
+      status: 'skipped'
+    })
+  }
+
+  private normalizeOutputPath(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/')
+    return platform() === 'win32' ? normalized.toLowerCase() : normalized
   }
 
   /**

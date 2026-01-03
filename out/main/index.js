@@ -4260,8 +4260,8 @@ function registerSettingsHandlers(deps = {}) {
       gpuType = "metal";
     } else if (currentPlatform === "darwin") {
       reason = "GPU acceleration requires Apple Silicon (M1/M2/M3). Intel Macs use CPU only.";
-    } else if (currentPlatform === "win32" || currentPlatform === "linux") {
-      reason = "AMD/NVIDIA GPU acceleration is not supported by bundled Whisper. Use LM Studio provider for GPU-accelerated transcription.";
+    } else {
+      reason = "GPU acceleration is not supported by bundled Whisper on this platform. Use LM Studio provider for GPU-accelerated transcription.";
     }
     const storedValue = getSetting(db2, "whisper_gpu_enabled");
     const enabled = storedValue !== null ? storedValue === "1" : gpuAvailable;
@@ -5184,7 +5184,10 @@ class WhisperService {
     this.logger = new Logger("WhisperService");
   }
   async transcribe(request) {
-    this.logger.info("transcription requested", { audio: request.audioPath });
+    this.logger.info("transcription requested", {
+      audio: request.audioPath,
+      useGpu: request.useGpu ?? "default"
+    });
     const binaryPath = resolveBundledBinary("whisper");
     const outputDir = request.outputDir ?? dirname(request.audioPath);
     const baseName = parse$7(request.audioPath).name;

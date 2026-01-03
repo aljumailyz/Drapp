@@ -706,13 +706,14 @@ export type ArchivalEncodingConfigFull = {
   outputDir: string
   preserveStructure: boolean
   overwriteExisting: boolean
+  fillMode: boolean
   deleteOriginal: boolean
   deleteOutputIfLarger: boolean
   extractThumbnail: boolean
   thumbnailTimestamp?: number
   extractCaptions: boolean
   captionLanguage?: string
-  limitedResourceMode: boolean
+  threadLimit: 0 | 4 | 6
 }
 
 export type ArchivalProgressEvent = {
