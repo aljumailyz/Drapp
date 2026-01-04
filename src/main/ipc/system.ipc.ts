@@ -18,7 +18,8 @@ const VERSION_ARGS: Record<BinaryName, string[]> = {
   'yt-dlp': ['--version'],
   ffmpeg: ['-version'],
   ffprobe: ['-version'],
-  whisper: ['-h']
+  whisper: ['-h'],
+  'faster-whisper': ['--help'] // Python-based, installed via pip
 }
 
 export function registerSystemHandlers(): void {

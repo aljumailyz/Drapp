@@ -2,9 +2,12 @@ import type {
   ArchivalEncodingConfig,
   VideoSourceInfo,
   Av1Options,
-  H265Options
+  H265Options,
+  HdrMasteringDisplayMetadata,
+  HdrContentLightLevel
 } from '../../../shared/types/archival.types'
 import { getOptimalCrf, getResolutionCategory } from '../../../shared/types/archival.types'
+import type { CPUSIMDCapabilities } from '../hw-accel-detector'
 
 /**
  * Two-pass encoding arguments
@@ -26,19 +29,27 @@ export interface TwoPassArgs {
  * Key features:
  * - Scene-change aware keyframe placement (prevents GOP crossing scene cuts)
  * - Film grain synthesis (SVT-AV1 only)
- * - HDR passthrough with proper color metadata
+ * - HDR passthrough with proper color metadata and HDR10 static metadata preservation
  * - Audio stream copy by default
  * - Two-pass encoding for better quality/size efficiency (optional)
+ * - AVX-512 optimizations when available (for x265)
+ *
+ * @param inputPath - Path to input video file
+ * @param outputPath - Path to output video file
+ * @param config - Archival encoding configuration
+ * @param sourceInfo - Source video metadata including HDR info
+ * @param cpuCapabilities - Optional CPU SIMD capabilities for optimization
  */
 export function buildArchivalFFmpegArgs(
   inputPath: string,
   outputPath: string,
   config: ArchivalEncodingConfig,
-  sourceInfo: VideoSourceInfo
+  sourceInfo: VideoSourceInfo,
+  cpuCapabilities?: CPUSIMDCapabilities | null
 ): string[] {
   // Dispatch to codec-specific builder
   if (config.codec === 'h265') {
-    return buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo)
+    return buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapabilities)
   }
   return buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo)
 }
@@ -67,6 +78,7 @@ export function isTwoPassEnabled(config: ArchivalEncodingConfig): boolean {
  * @param config - Archival encoding configuration
  * @param sourceInfo - Source video metadata
  * @param passLogDir - Directory to store pass log files
+ * @param cpuCapabilities - Optional CPU SIMD capabilities for optimization
  * @returns TwoPassArgs with pass1, pass2, and passLogFile paths
  */
 export function buildTwoPassArgs(
@@ -74,14 +86,15 @@ export function buildTwoPassArgs(
   outputPath: string,
   config: ArchivalEncodingConfig,
   sourceInfo: VideoSourceInfo,
-  passLogDir: string
+  passLogDir: string,
+  cpuCapabilities?: CPUSIMDCapabilities | null
 ): TwoPassArgs {
   const { basename, join } = require('node:path')
   const inputName = basename(inputPath, require('node:path').extname(inputPath))
   const passLogFile = join(passLogDir, `${inputName}-pass`)
 
   if (config.codec === 'h265') {
-    return buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile)
+    return buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile, cpuCapabilities)
   }
   return buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile)
 }
@@ -200,7 +213,8 @@ function buildH265TwoPassArgs(
   outputPath: string,
   config: ArchivalEncodingConfig,
   sourceInfo: VideoSourceInfo,
-  passLogFile: string
+  passLogFile: string,
+  cpuCapabilities?: CPUSIMDCapabilities | null
 ): TwoPassArgs {
   const options = config.h265
 
@@ -218,7 +232,7 @@ function buildH265TwoPassArgs(
   pass1.push('-preset', options.preset)
 
   // Build x265-params with pass=1
-  const x265ParamsPass1 = buildX265ParamsWithPass(options, sourceInfo, 1, passLogFile)
+  const x265ParamsPass1 = buildX265ParamsWithPass(options, sourceInfo, 1, passLogFile, cpuCapabilities)
   if (x265ParamsPass1) {
     pass1.push('-x265-params', x265ParamsPass1)
   }
@@ -256,7 +270,7 @@ function buildH265TwoPassArgs(
   pass2.push('-preset', options.preset)
 
   // Build x265-params with pass=2
-  const x265ParamsPass2 = buildX265ParamsWithPass(options, sourceInfo, 2, passLogFile)
+  const x265ParamsPass2 = buildX265ParamsWithPass(options, sourceInfo, 2, passLogFile, cpuCapabilities)
   if (x265ParamsPass2) {
     pass2.push('-x265-params', x265ParamsPass2)
   }
@@ -300,12 +314,19 @@ function buildH265TwoPassArgs(
  *
  * Note: x265 two-pass with CRF requires VBV settings (vbv-maxrate and vbv-bufsize)
  * We use "capped CRF" mode which provides consistent quality with bitrate limits
+ *
+ * @param options - H.265 encoding options
+ * @param sourceInfo - Source video metadata including HDR info
+ * @param passNumber - Which pass (1 or 2)
+ * @param statsFile - Path to stats file for two-pass
+ * @param cpuCapabilities - Optional CPU SIMD capabilities for optimization
  */
 function buildX265ParamsWithPass(
   options: H265Options,
   sourceInfo: VideoSourceInfo,
   passNumber: 1 | 2,
-  statsFile: string
+  statsFile: string,
+  cpuCapabilities?: CPUSIMDCapabilities | null
 ): string {
   const params: string[] = []
 
@@ -328,9 +349,22 @@ function buildX265ParamsWithPass(
   params.push('rc-lookahead=40')
   params.push('sao=1')
 
+  // HDR handling with full metadata preservation
   if (sourceInfo.isHdr) {
     params.push('hdr10=1')
     params.push('hdr10-opt=1')
+
+    // Add HDR10 static metadata if available
+    const masterDisplayStr = buildMasterDisplayString(sourceInfo.masteringDisplay)
+    if (masterDisplayStr) {
+      params.push(`master-display=${masterDisplayStr}`)
+    }
+
+    // Add content light level if available
+    const maxCllStr = buildMaxCllString(sourceInfo.contentLightLevel)
+    if (maxCllStr) {
+      params.push(`max-cll=${maxCllStr}`)
+    }
   }
 
   params.push('aq-mode=3')
@@ -339,6 +373,11 @@ function buildX265ParamsWithPass(
     params.push('level-idc=51')
   } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
     params.push('level-idc=41')
+  }
+
+  // Enable AVX-512 optimizations if available
+  if (cpuCapabilities?.avx512) {
+    params.push('asm=avx512')
   }
 
   return params.join(':')
@@ -485,7 +524,8 @@ function buildH265FFmpegArgs(
   inputPath: string,
   outputPath: string,
   config: ArchivalEncodingConfig,
-  sourceInfo: VideoSourceInfo
+  sourceInfo: VideoSourceInfo,
+  cpuCapabilities?: CPUSIMDCapabilities | null
 ): string[] {
   const args: string[] = []
 
@@ -506,8 +546,8 @@ function buildH265FFmpegArgs(
   // Preset for encoding speed/quality tradeoff
   args.push('-preset', config.h265.preset)
 
-  // Build x265-params string
-  const x265Params = buildX265Params(config.h265, sourceInfo)
+  // Build x265-params string (includes AVX-512 optimization when available)
+  const x265Params = buildX265Params(config.h265, sourceInfo, cpuCapabilities)
   if (x265Params) {
     args.push('-x265-params', x265Params)
   }
@@ -619,7 +659,7 @@ function buildLibaomParams(options: Av1Options, sourceInfo: VideoSourceInfo): st
  * - Maximum quality preservation
  * - Scene-aware keyframes for better seeking without crossing scenes
  * - Film grain synthesis for natural appearance and better compression
- * - Proper HDR handling
+ * - Proper HDR handling with full metadata preservation
  */
 function buildSvtAv1Params(options: Av1Options, sourceInfo: VideoSourceInfo): string {
   const params: string[] = []
@@ -671,10 +711,24 @@ function buildSvtAv1Params(options: Av1Options, sourceInfo: VideoSourceInfo): st
   // Default is 120 at preset 6, but we can be explicit
   params.push('lookahead=120')
 
-  // For HDR content, ensure proper handling
+  // For HDR content, ensure proper handling with full metadata preservation
   if (sourceInfo.isHdr) {
     // Enable HDR metadata passthrough
     params.push('enable-hdr=1')
+
+    // SVT-AV1 HDR10 static metadata passthrough
+    // Format for mastering-display: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)
+    // Note: SVT-AV1 uses the same format as x265
+    const masterDisplayStr = buildMasterDisplayString(sourceInfo.masteringDisplay)
+    if (masterDisplayStr) {
+      params.push(`mastering-display=${masterDisplayStr}`)
+    }
+
+    // Content light level: maxCLL,maxFALL
+    const maxCllStr = buildMaxCllString(sourceInfo.contentLightLevel)
+    if (maxCllStr) {
+      params.push(`content-light=${maxCllStr}`)
+    }
   }
 
   // fast-decode=0 means no decode optimizations that would hurt quality
@@ -691,8 +745,16 @@ function buildSvtAv1Params(options: Av1Options, sourceInfo: VideoSourceInfo): st
 /**
  * Build x265-specific parameters string
  * Optimized for web delivery with good compression
+ *
+ * @param options - H.265 encoding options
+ * @param sourceInfo - Source video metadata including HDR info
+ * @param cpuCapabilities - Optional CPU SIMD capabilities for optimization
  */
-function buildX265Params(options: H265Options, sourceInfo: VideoSourceInfo): string {
+function buildX265Params(
+  options: H265Options,
+  sourceInfo: VideoSourceInfo,
+  cpuCapabilities?: CPUSIMDCapabilities | null
+): string {
   const params: string[] = []
 
   // Keyframe interval (GOP size)
@@ -715,10 +777,22 @@ function buildX265Params(options: H265Options, sourceInfo: VideoSourceInfo): str
   // Enable SAO (Sample Adaptive Offset) for better quality
   params.push('sao=1')
 
-  // For HDR content, ensure proper handling
+  // For HDR content, ensure proper handling with full metadata preservation
   if (sourceInfo.isHdr) {
     params.push('hdr10=1')
     params.push('hdr10-opt=1')
+
+    // Add HDR10 static metadata if available
+    const masterDisplayStr = buildMasterDisplayString(sourceInfo.masteringDisplay)
+    if (masterDisplayStr) {
+      params.push(`master-display=${masterDisplayStr}`)
+    }
+
+    // Add content light level if available
+    const maxCllStr = buildMaxCllString(sourceInfo.contentLightLevel)
+    if (maxCllStr) {
+      params.push(`max-cll=${maxCllStr}`)
+    }
   }
 
   // Adaptive quantization for better perceptual quality
@@ -731,7 +805,45 @@ function buildX265Params(options: H265Options, sourceInfo: VideoSourceInfo): str
     params.push('level-idc=41')
   }
 
+  // Enable AVX-512 optimizations if available
+  // x265 auto-detects, but we can force it for maximum performance
+  if (cpuCapabilities?.avx512) {
+    params.push('asm=avx512')
+  }
+
   return params.join(':')
+}
+
+/**
+ * Build x265 master-display string from HDR metadata
+ * Format: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)
+ * All chromaticity values are in 0.00002 units (multiply by 50000)
+ * Luminance is in 0.0001 cd/m² units
+ */
+function buildMasterDisplayString(metadata?: HdrMasteringDisplayMetadata): string | null {
+  if (!metadata) return null
+
+  // Ensure we have valid data
+  if (!metadata.greenX || !metadata.blueX || !metadata.redX) return null
+
+  // Format: G(gx,gy)B(bx,by)R(rx,ry)WP(wpx,wpy)L(maxL,minL)
+  // x265 expects coordinates as integers where 50000 = 1.0
+  // and luminance where 10000 = 1 cd/m²
+  const maxL = Math.round(metadata.maxLuminance * 10000)
+  const minL = Math.round(metadata.minLuminance * 10000)
+
+  return `G(${metadata.greenX},${metadata.greenY})B(${metadata.blueX},${metadata.blueY})R(${metadata.redX},${metadata.redY})WP(${metadata.whitePointX},${metadata.whitePointY})L(${maxL},${minL})`
+}
+
+/**
+ * Build x265 max-cll string from content light level metadata
+ * Format: maxCLL,maxFALL (both in cd/m²)
+ */
+function buildMaxCllString(metadata?: HdrContentLightLevel): string | null {
+  if (!metadata) return null
+  if (metadata.maxCll === 0 && metadata.maxFall === 0) return null
+
+  return `${metadata.maxCll},${metadata.maxFall}`
 }
 
 /**
@@ -744,8 +856,20 @@ function buildHdrArgsH265(sourceInfo: VideoSourceInfo): string[] {
   // Use 10-bit pixel format for HDR
   args.push('-pix_fmt', 'yuv420p10le')
 
-  // Preserve color metadata
-  if (sourceInfo.colorSpace) {
+  // Use precise color metadata from source if available
+  if (sourceInfo.colorPrimaries || sourceInfo.colorTransfer || sourceInfo.colorMatrix) {
+    // Use exact values from source
+    if (sourceInfo.colorPrimaries) {
+      args.push('-color_primaries', sourceInfo.colorPrimaries)
+    }
+    if (sourceInfo.colorTransfer) {
+      args.push('-color_trc', sourceInfo.colorTransfer)
+    }
+    if (sourceInfo.colorMatrix) {
+      args.push('-colorspace', sourceInfo.colorMatrix)
+    }
+  } else if (sourceInfo.colorSpace) {
+    // Fall back to parsing combined color space string
     const colorParams = parseColorSpace(sourceInfo.colorSpace)
     if (colorParams.primaries) {
       args.push('-color_primaries', colorParams.primaries)
@@ -776,9 +900,20 @@ function buildHdrArgs(sourceInfo: VideoSourceInfo): string[] {
   // Use 10-bit pixel format for HDR
   args.push('-pix_fmt', 'yuv420p10le')
 
-  // Preserve color metadata
-  // These ensure the encoder doesn't override the source color info
-  if (sourceInfo.colorSpace) {
+  // Use precise color metadata from source if available
+  if (sourceInfo.colorPrimaries || sourceInfo.colorTransfer || sourceInfo.colorMatrix) {
+    // Use exact values from source
+    if (sourceInfo.colorPrimaries) {
+      args.push('-color_primaries', sourceInfo.colorPrimaries)
+    }
+    if (sourceInfo.colorTransfer) {
+      args.push('-color_trc', sourceInfo.colorTransfer)
+    }
+    if (sourceInfo.colorMatrix) {
+      args.push('-colorspace', sourceInfo.colorMatrix)
+    }
+  } else if (sourceInfo.colorSpace) {
+    // Fall back to parsing combined color space string
     const colorParams = parseColorSpace(sourceInfo.colorSpace)
     if (colorParams.primaries) {
       args.push('-color_primaries', colorParams.primaries)

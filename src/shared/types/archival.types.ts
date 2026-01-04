@@ -6,6 +6,36 @@ export type ArchivalResolution = '4k' | '1440p' | '1080p' | '720p' | '480p' | '3
 export type ArchivalColorMode = 'hdr' | 'sdr' | 'auto'
 
 /**
+ * HDR10 static metadata for mastering display
+ * Chromaticity values are stored as integers where 50000 = 1.0 (e.g., 13250 = 0.265)
+ * Luminance values are stored in nits (cd/m²)
+ */
+export interface HdrMasteringDisplayMetadata {
+  // Display primaries (xy chromaticity coordinates as integers, 50000 = 1.0)
+  // e.g., for BT.2020: G(8500,39850) B(6550,2300) R(35400,14600)
+  greenX: number
+  greenY: number
+  blueX: number
+  blueY: number
+  redX: number
+  redY: number
+  // White point (xy chromaticity coordinates as integers, 50000 = 1.0)
+  whitePointX: number
+  whitePointY: number
+  // Luminance in nits (cd/m²) - will be multiplied by 10000 for x265/SVT-AV1 format
+  maxLuminance: number // e.g., 1000 for 1000 nits peak brightness
+  minLuminance: number // e.g., 0.0001 for very dark blacks
+}
+
+/**
+ * Content light level metadata (MaxCLL, MaxFALL)
+ */
+export interface HdrContentLightLevel {
+  maxCll: number // Maximum Content Light Level in nits
+  maxFall: number // Maximum Frame Average Light Level in nits
+}
+
+/**
  * Video metadata used for determining optimal encoding settings
  */
 export interface VideoSourceInfo {
@@ -19,6 +49,13 @@ export interface VideoSourceInfo {
   isHdr: boolean
   bitrate?: number // Source bitrate in bits per second
   audioCodec?: string // Source audio codec (aac, opus, vorbis, flac, etc.)
+  // HDR10 static metadata (for proper HDR preservation)
+  masteringDisplay?: HdrMasteringDisplayMetadata
+  contentLightLevel?: HdrContentLightLevel
+  // Color primaries and transfer characteristics from source
+  colorPrimaries?: string // bt709, bt2020, etc.
+  colorTransfer?: string // smpte2084 (PQ), arib-std-b67 (HLG), bt709, etc.
+  colorMatrix?: string // bt709, bt2020nc, bt2020c, etc.
 }
 
 /**

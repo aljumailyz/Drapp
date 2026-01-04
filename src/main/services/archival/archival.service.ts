@@ -30,6 +30,7 @@ import {
   type ArchivalErrorType,
   type VideoSourceInfo
 } from '../../../shared/types/archival.types'
+import { detectCPUSIMDCapabilities, type CPUSIMDCapabilities } from '../hw-accel-detector'
 import { platform } from 'node:os'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -62,6 +63,10 @@ export class ArchivalService {
   private speedSamples: number[] = []
   private readonly maxSpeedSamples = 10 // Moving average window
 
+  // CPU capabilities for SIMD optimizations (AVX-512, etc.)
+  private cpuCapabilities: CPUSIMDCapabilities | null = null
+  private cpuCapabilitiesDetected = false
+
   // Whisper model path getter (injected from outside)
   private whisperModelPathGetter: (() => string | null) | null = null
   // Whisper provider settings getter
@@ -70,6 +75,37 @@ export class ArchivalService {
   private whisperGpuEnabledGetter: (() => boolean) | null = null
 
   constructor(private readonly onEvent?: ArchivalEventHandler) {}
+
+  /**
+   * Detect and cache CPU SIMD capabilities
+   * Called lazily on first encoding job
+   */
+  private async ensureCpuCapabilities(): Promise<CPUSIMDCapabilities | null> {
+    if (this.cpuCapabilitiesDetected) {
+      return this.cpuCapabilities
+    }
+
+    try {
+      this.cpuCapabilities = await detectCPUSIMDCapabilities()
+      this.cpuCapabilitiesDetected = true
+
+      if (this.cpuCapabilities) {
+        this.logger.info('CPU capabilities detected', {
+          architecture: this.cpuCapabilities.architecture,
+          avx512: this.cpuCapabilities.avx512,
+          avx2: this.cpuCapabilities.avx2,
+          neon: this.cpuCapabilities.neon,
+          sve: this.cpuCapabilities.sve,
+          model: this.cpuCapabilities.cpuModel
+        })
+      }
+    } catch (error) {
+      this.logger.warn('Failed to detect CPU capabilities', { error })
+      this.cpuCapabilitiesDetected = true
+    }
+
+    return this.cpuCapabilities
+  }
 
   /**
    * Set the function to get the Whisper model path from settings
@@ -765,18 +801,30 @@ export class ArchivalService {
       hdrFormat: extendedMeta.hdrFormat,
       isHdr,
       bitrate: meta.bitrate ?? undefined,
-      audioCodec: extendedMeta.audioCodec
+      audioCodec: extendedMeta.audioCodec,
+      // HDR10 static metadata
+      masteringDisplay: extendedMeta.masteringDisplay,
+      contentLightLevel: extendedMeta.contentLightLevel,
+      // Individual color components for precise encoder configuration
+      colorPrimaries: extendedMeta.colorPrimaries,
+      colorTransfer: extendedMeta.colorTransfer,
+      colorMatrix: extendedMeta.colorMatrix
     }
   }
 
   /**
-   * Get extended metadata including HDR info and audio codec
+   * Get extended metadata including HDR info, HDR10 static metadata, and audio codec
    */
   private async getExtendedMetadata(filePath: string): Promise<{
     bitDepth?: number
     colorSpace?: string
     hdrFormat?: string | null
     audioCodec?: string
+    colorPrimaries?: string
+    colorTransfer?: string
+    colorMatrix?: string
+    masteringDisplay?: import('../../../shared/types/archival.types').HdrMasteringDisplayMetadata
+    contentLightLevel?: import('../../../shared/types/archival.types').HdrContentLightLevel
   }> {
     const ffprobePath = resolveBundledBinary('ffprobe')
 
@@ -785,6 +833,7 @@ export class ArchivalService {
         '-v', 'quiet',
         '-print_format', 'json',
         '-show_streams',
+        '-show_frames', '-read_intervals', '%+#1', // Read first frame for side_data
         filePath
       ])
 
@@ -803,6 +852,37 @@ export class ArchivalService {
               color_transfer?: string
               side_data_list?: Array<{
                 side_data_type?: string
+                // Mastering display metadata
+                red_x?: string
+                red_y?: string
+                green_x?: string
+                green_y?: string
+                blue_x?: string
+                blue_y?: string
+                white_point_x?: string
+                white_point_y?: string
+                min_luminance?: string
+                max_luminance?: string
+                // Content light level
+                max_content?: number
+                max_average?: number
+              }>
+            }>
+            frames?: Array<{
+              side_data_list?: Array<{
+                side_data_type?: string
+                red_x?: string
+                red_y?: string
+                green_x?: string
+                green_y?: string
+                blue_x?: string
+                blue_y?: string
+                white_point_x?: string
+                white_point_y?: string
+                min_luminance?: string
+                max_luminance?: string
+                max_content?: number
+                max_average?: number
               }>
             }>
           }
@@ -821,32 +901,87 @@ export class ArchivalService {
             ? parseInt(videoStream.bits_per_raw_sample, 10)
             : undefined
 
-          // Build color space string from components
-          const colorParts = [
-            videoStream.color_primaries,
-            videoStream.color_transfer,
-            videoStream.color_space
-          ].filter(Boolean)
+          // Store individual color components
+          const colorPrimaries = videoStream.color_primaries
+          const colorTransfer = videoStream.color_transfer
+          const colorMatrix = videoStream.color_space
+
+          // Build color space string from components (for backward compatibility)
+          const colorParts = [colorPrimaries, colorTransfer, colorMatrix].filter(Boolean)
           const colorSpace = colorParts.length > 0 ? colorParts.join('/') : undefined
 
-          // Check for HDR metadata in side data
+          // Check for HDR metadata in side data (both stream and frame level)
           let hdrFormat: string | null = null
-          if (videoStream.side_data_list) {
-            for (const sideData of videoStream.side_data_list) {
-              if (sideData.side_data_type?.includes('HDR')) {
-                hdrFormat = sideData.side_data_type
-                break
+          let masteringDisplay: import('../../../shared/types/archival.types').HdrMasteringDisplayMetadata | undefined
+          let contentLightLevel: import('../../../shared/types/archival.types').HdrContentLightLevel | undefined
+
+          // Combine side_data from stream and first frame
+          const allSideData = [
+            ...(videoStream.side_data_list || []),
+            ...(parsed.frames?.[0]?.side_data_list || [])
+          ]
+
+          for (const sideData of allSideData) {
+            const sideDataType = sideData.side_data_type?.toLowerCase() || ''
+
+            // Detect HDR format
+            if (sideDataType.includes('mastering display') || sideDataType.includes('hdr')) {
+              if (!hdrFormat) hdrFormat = 'HDR10'
+
+              // Extract mastering display metadata
+              if (sideData.red_x && sideData.green_x && sideData.blue_x) {
+                // ffprobe returns values as fractions like "13250/50000"
+                const parseCoord = (val: string | undefined): number => {
+                  if (!val) return 0
+                  if (val.includes('/')) {
+                    const [num, den] = val.split('/')
+                    return Math.round((parseInt(num, 10) / parseInt(den, 10)) * 50000)
+                  }
+                  return parseInt(val, 10)
+                }
+
+                const parseLuminance = (val: string | undefined): number => {
+                  if (!val) return 0
+                  if (val.includes('/')) {
+                    const [num, den] = val.split('/')
+                    return parseInt(num, 10) / parseInt(den, 10)
+                  }
+                  return parseFloat(val)
+                }
+
+                masteringDisplay = {
+                  redX: parseCoord(sideData.red_x),
+                  redY: parseCoord(sideData.red_y),
+                  greenX: parseCoord(sideData.green_x),
+                  greenY: parseCoord(sideData.green_y),
+                  blueX: parseCoord(sideData.blue_x),
+                  blueY: parseCoord(sideData.blue_y),
+                  whitePointX: parseCoord(sideData.white_point_x),
+                  whitePointY: parseCoord(sideData.white_point_y),
+                  maxLuminance: parseLuminance(sideData.max_luminance),
+                  minLuminance: parseLuminance(sideData.min_luminance)
+                }
               }
-              if (sideData.side_data_type?.includes('Dolby')) {
-                hdrFormat = 'Dolby Vision'
-                break
+            }
+
+            // Extract content light level
+            if (sideDataType.includes('content light level')) {
+              if (sideData.max_content !== undefined && sideData.max_average !== undefined) {
+                contentLightLevel = {
+                  maxCll: sideData.max_content,
+                  maxFall: sideData.max_average
+                }
               }
+            }
+
+            if (sideDataType.includes('dolby')) {
+              hdrFormat = 'Dolby Vision'
             }
           }
 
-          // Infer HDR from transfer characteristics
-          if (!hdrFormat && videoStream.color_transfer) {
-            const transfer = videoStream.color_transfer.toLowerCase()
+          // Infer HDR from transfer characteristics if not detected from side data
+          if (!hdrFormat && colorTransfer) {
+            const transfer = colorTransfer.toLowerCase()
             if (transfer.includes('smpte2084') || transfer.includes('pq')) {
               hdrFormat = 'HDR10'
             } else if (transfer.includes('arib-std-b67') || transfer.includes('hlg')) {
@@ -857,7 +992,17 @@ export class ArchivalService {
           // Get audio codec
           const audioCodec = audioStream?.codec_name
 
-          resolve({ bitDepth, colorSpace, hdrFormat, audioCodec })
+          resolve({
+            bitDepth,
+            colorSpace,
+            hdrFormat,
+            audioCodec,
+            colorPrimaries,
+            colorTransfer,
+            colorMatrix,
+            masteringDisplay,
+            contentLightLevel
+          })
         } catch {
           resolve({})
         }
@@ -878,18 +1023,25 @@ export class ArchivalService {
 
     const config = this.activeJob.config
 
+    // Detect CPU capabilities for SIMD optimizations (AVX-512, etc.)
+    const cpuCapabilities = await this.ensureCpuCapabilities()
+
     // Check if two-pass encoding is enabled
     if (isTwoPassEnabled(config)) {
-      await this.encodeTwoPass(item, sourceInfo)
+      await this.encodeTwoPass(item, sourceInfo, cpuCapabilities)
     } else {
-      await this.encodeSinglePass(item, sourceInfo)
+      await this.encodeSinglePass(item, sourceInfo, cpuCapabilities)
     }
   }
 
   /**
    * Perform two-pass encoding
    */
-  private async encodeTwoPass(item: ArchivalBatchItem, sourceInfo: VideoSourceInfo): Promise<void> {
+  private async encodeTwoPass(
+    item: ArchivalBatchItem,
+    sourceInfo: VideoSourceInfo,
+    cpuCapabilities: CPUSIMDCapabilities | null
+  ): Promise<void> {
     if (!this.activeJob) {
       throw new Error('No active job')
     }
@@ -902,13 +1054,14 @@ export class ArchivalService {
     await mkdir(passLogDir, { recursive: true })
 
     try {
-      // Build two-pass arguments
+      // Build two-pass arguments (includes AVX-512 optimization when available)
       const twoPassArgs = buildTwoPassArgs(
         item.inputPath,
         item.outputPath,
         config,
         sourceInfo,
-        passLogDir
+        passLogDir,
+        cpuCapabilities
       )
 
       // ===== PASS 1 =====
@@ -1112,7 +1265,11 @@ export class ArchivalService {
   /**
    * Perform single-pass encoding (original implementation)
    */
-  private encodeSinglePass(item: ArchivalBatchItem, sourceInfo: VideoSourceInfo): Promise<void> {
+  private encodeSinglePass(
+    item: ArchivalBatchItem,
+    sourceInfo: VideoSourceInfo,
+    cpuCapabilities: CPUSIMDCapabilities | null
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.activeJob) {
         reject(new Error('No active job'))
@@ -1121,11 +1278,13 @@ export class ArchivalService {
 
       const ffmpegPath = resolveBundledBinary('ffmpeg')
       const batchId = this.activeJob.id
+      // Build FFmpeg args (includes AVX-512 optimization when available for x265)
       const args = buildArchivalFFmpegArgs(
         item.inputPath,
         item.outputPath,
         this.activeJob.config,
-        sourceInfo
+        sourceInfo,
+        cpuCapabilities
       )
 
       // Add progress output

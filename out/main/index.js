@@ -2,10 +2,10 @@ import require$$1$4, { app, ipcMain, BrowserWindow, dialog, shell, safeStorage, 
 import { join, basename, extname, dirname, parse as parse$7, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdir as mkdir$4, writeFile as writeFile$1, unlink, stat as stat$5, readdir, readFile as readFile$1, open, rm, access, chmod, rename as rename$2, appendFile, watch, constants as constants$4, copyFile as copyFile$2 } from "node:fs/promises";
-import { statSync, mkdirSync, existsSync, accessSync, constants as constants$3, createWriteStream, readFileSync as readFileSync$1, watch as watch$1 } from "node:fs";
+import { existsSync, statSync, mkdirSync, accessSync, constants as constants$3, createWriteStream, readFileSync as readFileSync$1, watch as watch$1 } from "node:fs";
 import Database from "better-sqlite3";
 import { randomUUID, randomFillSync, createHash } from "node:crypto";
-import { spawn, execFile, exec } from "node:child_process";
+import { execSync, spawn, execFile, exec } from "node:child_process";
 import { promisify } from "node:util";
 import os$1, { platform as platform$1, arch } from "node:os";
 import require$$1 from "fs";
@@ -401,14 +401,133 @@ function platformDir() {
   }
   return "linux";
 }
+function findInSystemPath(name) {
+  if (process.platform === "win32") {
+    return null;
+  }
+  try {
+    const result = execSync(`which ${name}`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    const path2 = result.trim();
+    if (path2 && existsSync(path2)) {
+      return path2;
+    }
+  } catch {
+  }
+  const commonPaths = [
+    `/usr/bin/${name}`,
+    `/usr/local/bin/${name}`,
+    `/opt/homebrew/bin/${name}`,
+    // macOS Homebrew ARM
+    `/home/linuxbrew/.linuxbrew/bin/${name}`
+    // Linux Homebrew
+  ];
+  for (const path2 of commonPaths) {
+    if (existsSync(path2)) {
+      return path2;
+    }
+  }
+  return null;
+}
 function resolveBundledBinary(name) {
   const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
   const binaryName = process.platform === "win32" ? `${name}.exe` : name;
-  return join(resourcesPath, "bin", platformDir(), binaryName);
+  const bundledPath = join(resourcesPath, "bin", platformDir(), binaryName);
+  if (existsSync(bundledPath)) {
+    return bundledPath;
+  }
+  if (process.platform !== "win32") {
+    const systemPath = findInSystemPath(name);
+    if (systemPath) {
+      return systemPath;
+    }
+  }
+  return bundledPath;
 }
 function getBundledBinaryDir() {
   const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
   return join(resourcesPath, "bin", platformDir());
+}
+function isBinaryAvailable(name) {
+  const path2 = resolveBundledBinary(name);
+  return existsSync(path2);
+}
+function detectFasterWhisper() {
+  const cliTools = [
+    "faster-whisper",
+    // Main CLI (from faster-whisper package with CLI extras)
+    "whisper-ctranslate2"
+    // Alternative CLI that uses faster-whisper
+  ];
+  for (const tool of cliTools) {
+    try {
+      execSync(`${tool} --help`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      return { available: true, command: [tool] };
+    } catch {
+    }
+  }
+  return { available: false, command: [] };
+}
+function detectBestWhisperBackend() {
+  const whisperCppAvailable = isBinaryAvailable("whisper");
+  const fasterWhisper = detectFasterWhisper();
+  if (process.platform === "linux") {
+    if (fasterWhisper.available) {
+      return {
+        backend: "faster-whisper",
+        reason: "faster-whisper provides better CPU performance on Linux",
+        command: fasterWhisper.command
+      };
+    }
+    if (whisperCppAvailable) {
+      return {
+        backend: "whisper.cpp",
+        reason: "whisper.cpp is available (consider installing faster-whisper for better performance)",
+        command: void 0
+      };
+    }
+    return {
+      backend: "none",
+      reason: "No whisper backend available. Install faster-whisper: pip install faster-whisper"
+    };
+  }
+  if (process.platform === "darwin") {
+    if (whisperCppAvailable) {
+      return {
+        backend: "whisper.cpp",
+        reason: "whisper.cpp with Metal GPU acceleration",
+        command: void 0
+      };
+    }
+    if (fasterWhisper.available) {
+      return {
+        backend: "faster-whisper",
+        reason: "faster-whisper (whisper.cpp not available)",
+        command: fasterWhisper.command
+      };
+    }
+    return {
+      backend: "none",
+      reason: "No whisper backend available"
+    };
+  }
+  if (whisperCppAvailable) {
+    return {
+      backend: "whisper.cpp",
+      reason: "whisper.cpp",
+      command: void 0
+    };
+  }
+  if (fasterWhisper.available) {
+    return {
+      backend: "faster-whisper",
+      reason: "faster-whisper (whisper.cpp not available)",
+      command: fasterWhisper.command
+    };
+  }
+  return {
+    backend: "none",
+    reason: "No whisper backend available"
+  };
 }
 class MetadataService {
   constructor() {
@@ -5060,8 +5179,10 @@ const DOWNLOAD_URLS = {
       archiveType: "zip",
       pathInArchive: "ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe"
     },
-    whisper: null
+    whisper: null,
     // Whisper.cpp requires manual setup - too complex for auto-download
+    "faster-whisper": null
+    // Python package - install via: pip install faster-whisper
   },
   darwin: {
     "yt-dlp": {
@@ -5078,17 +5199,30 @@ const DOWNLOAD_URLS = {
       archiveType: "zip",
       pathInArchive: "ffprobe"
     },
-    whisper: null
+    whisper: null,
+    "faster-whisper": null
+    // Python package - install via: pip install faster-whisper
   },
   linux: {
     "yt-dlp": {
       url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
       archiveType: "exe"
     },
-    ffmpeg: null,
-    // Linux users should use package manager
-    ffprobe: null,
-    whisper: null
+    // BtbN provides static FFmpeg builds for Linux (same source as Windows builds)
+    // These are fully static and include all common codecs (x264, x265, av1, etc.)
+    ffmpeg: {
+      url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz",
+      archiveType: "tar.xz",
+      pathInArchive: "ffmpeg-master-latest-linux64-gpl/bin/ffmpeg"
+    },
+    ffprobe: {
+      url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz",
+      archiveType: "tar.xz",
+      pathInArchive: "ffmpeg-master-latest-linux64-gpl/bin/ffprobe"
+    },
+    whisper: null,
+    "faster-whisper": null
+    // Python package - install via: pip install faster-whisper
   }
 };
 class BinaryDownloaderService {
@@ -5177,7 +5311,12 @@ class BinaryDownloaderService {
       }
       return {};
     }
-    const archiveExt = info.archiveType === "zip" ? ".zip" : ".7z";
+    const archiveExtMap = {
+      "zip": ".zip",
+      "7z": ".7z",
+      "tar.xz": ".tar.xz"
+    };
+    const archiveExt = archiveExtMap[info.archiveType] || ".zip";
     const archivePath = join(tempDir, `drapp-${binary2}${archiveExt}`);
     const cacheKey = info.url;
     if (!this.downloadCache.has(cacheKey)) {
@@ -5223,6 +5362,8 @@ class BinaryDownloaderService {
     await mkdir$4(dirname(targetPath), { recursive: true });
     if (info.archiveType === "zip") {
       await this.extractFromZip(archivePath, info.pathInArchive, targetPath);
+    } else if (info.archiveType === "tar.xz") {
+      await this.extractFromTarXz(archivePath, info.pathInArchive, targetPath);
     }
     if (process.platform !== "win32") {
       await chmod(targetPath, 493);
@@ -5285,6 +5426,46 @@ class BinaryDownloaderService {
       unzip.on("error", reject);
     });
   }
+  /**
+   * Extract a file from a tar.xz archive (used for Linux FFmpeg builds)
+   * Uses the system 'tar' command which handles .xz decompression natively
+   */
+  async extractFromTarXz(tarPath, pathInArchive, targetPath) {
+    const tempExtractDir = join(app.getPath("temp"), `drapp-extract-${Date.now()}`);
+    await mkdir$4(tempExtractDir, { recursive: true });
+    return new Promise((resolve, reject) => {
+      const tar = spawn("tar", [
+        "-xJf",
+        tarPath,
+        "-C",
+        tempExtractDir,
+        pathInArchive
+      ], { stdio: "pipe" });
+      let stderr = "";
+      tar.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+      tar.on("close", async (code) => {
+        if (code === 0) {
+          try {
+            const extractedPath = join(tempExtractDir, pathInArchive);
+            await rename$2(extractedPath, targetPath);
+            const { rm: rm2 } = await import("node:fs/promises");
+            await rm2(tempExtractDir, { recursive: true, force: true }).catch(() => {
+            });
+            resolve();
+          } catch (error2) {
+            reject(error2);
+          }
+        } else {
+          reject(new Error(`tar extraction failed with code ${code}: ${stderr}`));
+        }
+      });
+      tar.on("error", (error2) => {
+        reject(new Error(`tar command failed: ${error2.message}. Please install tar or xz-utils.`));
+      });
+    });
+  }
   async downloadSingleBinary(binary2) {
     const info = DOWNLOAD_URLS[process.platform]?.[binary2];
     if (!info) {
@@ -5311,7 +5492,9 @@ const VERSION_ARGS = {
   "yt-dlp": ["--version"],
   ffmpeg: ["-version"],
   ffprobe: ["-version"],
-  whisper: ["-h"]
+  whisper: ["-h"],
+  "faster-whisper": ["--help"]
+  // Python-based, installed via pip
 };
 function registerSystemHandlers() {
   ipcMain.handle("system/binaries", async () => {
@@ -5441,12 +5624,46 @@ function errorMessage(error2) {
 class WhisperService {
   constructor() {
     this.logger = new Logger("WhisperService");
+    this.cachedBackend = null;
+  }
+  /**
+   * Get the best available whisper backend for this platform
+   */
+  getBackend() {
+    if (!this.cachedBackend) {
+      this.cachedBackend = detectBestWhisperBackend();
+      this.logger.info("detected whisper backend", {
+        backend: this.cachedBackend.backend,
+        reason: this.cachedBackend.reason
+      });
+    }
+    return this.cachedBackend;
+  }
+  /**
+   * Check if any whisper backend is available
+   */
+  isAvailable() {
+    return this.getBackend().backend !== "none";
   }
   async transcribe(request) {
+    const backend = this.getBackend();
     this.logger.info("transcription requested", {
       audio: request.audioPath,
+      backend: backend.backend,
       useGpu: request.useGpu ?? "default"
     });
+    if (backend.backend === "none") {
+      throw new Error(`No whisper backend available. ${backend.reason}`);
+    }
+    if (backend.backend === "faster-whisper") {
+      return this.transcribeWithFasterWhisper(request, backend.command);
+    }
+    return this.transcribeWithWhisperCpp(request);
+  }
+  /**
+   * Transcribe using whisper.cpp binary
+   */
+  async transcribeWithWhisperCpp(request) {
     const binaryPath = resolveBundledBinary("whisper");
     const outputDir = request.outputDir ?? dirname(request.audioPath);
     const baseName = parse$7(request.audioPath).name;
@@ -5458,30 +5675,125 @@ class WhisperService {
       throw new Error(`whisper not executable at ${binaryPath}`);
     }
     mkdirSync(outputDir, { recursive: true });
-    await new Promise((resolve, reject) => {
-      if (request.signal?.aborted) {
+    await this.runProcess(
+      binaryPath,
+      this.buildWhisperCppArgs(request, outputPrefix),
+      request.signal,
+      request.onLog
+    );
+    if (!existsSync(outputPath)) {
+      throw new Error(`Transcription completed but output file not found: ${outputPath}`);
+    }
+    const transcript = readFileSync$1(outputPath, "utf-8");
+    return { transcript, outputPath };
+  }
+  /**
+   * Transcribe using faster-whisper (Python-based)
+   */
+  async transcribeWithFasterWhisper(request, command) {
+    if (command.length === 0) {
+      throw new Error("faster-whisper command not configured");
+    }
+    const outputDir = request.outputDir ?? dirname(request.audioPath);
+    const baseName = parse$7(request.audioPath).name;
+    const outputPath = join(outputDir, `${baseName}.txt`);
+    mkdirSync(outputDir, { recursive: true });
+    const modelArg = this.resolveModelForFasterWhisper(request.modelPath, request.modelSize);
+    const [cmd, ...baseArgs] = command;
+    const args = [
+      ...baseArgs,
+      request.audioPath,
+      "--model",
+      modelArg,
+      "--output_dir",
+      outputDir,
+      "--output_format",
+      "txt"
+    ];
+    if (request.language) {
+      args.push("--language", request.language);
+    }
+    if (request.useGpu === false) {
+      args.push("--device", "cpu");
+    }
+    await this.runProcess(cmd, args, request.signal, request.onLog);
+    if (!existsSync(outputPath)) {
+      throw new Error(`Transcription completed but output file not found: ${outputPath}`);
+    }
+    const transcript = readFileSync$1(outputPath, "utf-8");
+    return { transcript, outputPath };
+  }
+  /**
+   * Build arguments for whisper.cpp
+   */
+  buildWhisperCppArgs(request, outputPrefix) {
+    const args = [
+      "-m",
+      request.modelPath,
+      "-f",
+      request.audioPath,
+      "-otxt",
+      "-ovtt",
+      "-of",
+      outputPrefix
+    ];
+    if (request.language) {
+      args.push("-l", request.language);
+    }
+    if (request.useGpu === false) {
+      args.push("-ng");
+    }
+    return args;
+  }
+  /**
+   * Resolve model argument for faster-whisper
+   * Can be a model size name (tiny, base, small, medium, large-v3) or a path
+   */
+  resolveModelForFasterWhisper(modelPath, modelSize) {
+    if (modelSize) {
+      return modelSize;
+    }
+    const modelName = basename(modelPath).toLowerCase();
+    const sizePatterns = [
+      { pattern: /large-v3/i, size: "large-v3" },
+      { pattern: /large-v2/i, size: "large-v2" },
+      { pattern: /large/i, size: "large" },
+      { pattern: /medium/i, size: "medium" },
+      { pattern: /small/i, size: "small" },
+      { pattern: /base/i, size: "base" },
+      { pattern: /tiny/i, size: "tiny" }
+    ];
+    for (const { pattern, size } of sizePatterns) {
+      if (pattern.test(modelName)) {
+        this.logger.info(`inferred model size '${size}' from path`);
+        return size;
+      }
+    }
+    if (existsSync(modelPath)) {
+      return modelPath;
+    }
+    this.logger.warn("could not infer model size, defaulting to base");
+    return "base";
+  }
+  /**
+   * Run a process with abort signal support
+   */
+  async runProcess(command, args, signal, onLog) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
         const error2 = new Error("canceled");
         error2.name = "AbortError";
         reject(error2);
         return;
       }
-      const args = ["-m", request.modelPath, "-f", request.audioPath, "-otxt", "-ovtt", "-of", outputPrefix];
-      if (request.language) {
-        args.push("-l", request.language);
-      }
-      if (request.useGpu === false) {
-        args.push("-ng");
-      }
-      const child = spawn(binaryPath, args, { stdio: "pipe" });
+      const child = spawn(command, args, { stdio: "pipe" });
       let stderr = "";
       let settled = false;
       const finalize = (error2) => {
-        if (settled) {
-          return;
-        }
+        if (settled) return;
         settled = true;
-        if (request.signal) {
-          request.signal.removeEventListener("abort", onAbort);
+        if (signal) {
+          signal.removeEventListener("abort", onAbort);
         }
         if (error2) {
           reject(error2);
@@ -5495,12 +5807,16 @@ class WhisperService {
         error2.name = "AbortError";
         finalize(error2);
       };
-      if (request.signal) {
-        request.signal.addEventListener("abort", onAbort, { once: true });
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
       }
+      child.stdout?.on("data", (chunk) => {
+        const text = chunk.toString();
+        onLog?.(text);
+      });
       child.stderr.on("data", (chunk) => {
         const text = chunk.toString();
-        request.onLog?.(text);
+        onLog?.(text);
         stderr += text;
         if (stderr.length > 8e3) {
           stderr = stderr.slice(-8e3);
@@ -5513,15 +5829,10 @@ class WhisperService {
         if (code === 0) {
           finalize();
         } else {
-          finalize(new Error(stderr || `whisper exited with code ${code ?? "unknown"}`));
+          finalize(new Error(stderr || `process exited with code ${code ?? "unknown"}`));
         }
       });
     });
-    const transcript = readFileSync$1(outputPath, "utf-8");
-    return {
-      transcript,
-      outputPath
-    };
   }
 }
 const ARCHIVAL_CRF_DEFAULTS = {
@@ -5755,9 +6066,9 @@ function classifyError(errorMessage2) {
   }
   return "unknown";
 }
-function buildArchivalFFmpegArgs(inputPath, outputPath, config, sourceInfo) {
+function buildArchivalFFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapabilities) {
   if (config.codec === "h265") {
-    return buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo);
+    return buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapabilities);
   }
   return buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo);
 }
@@ -5770,12 +6081,12 @@ function isTwoPassEnabled(config) {
   }
   return false;
 }
-function buildTwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogDir) {
+function buildTwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogDir, cpuCapabilities) {
   const { basename: basename2, join: join2 } = require2("node:path");
   const inputName = basename2(inputPath, require2("node:path").extname(inputPath));
   const passLogFile = join2(passLogDir, `${inputName}-pass`);
   if (config.codec === "h265") {
-    return buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile);
+    return buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile, cpuCapabilities);
   }
   return buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile);
 }
@@ -5842,7 +6153,7 @@ function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogF
   pass2.push(outputPath);
   return { pass1, pass2, passLogFile };
 }
-function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile) {
+function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile, cpuCapabilities) {
   const options = config.h265;
   const pass1 = [];
   pass1.push("-i", inputPath);
@@ -5852,7 +6163,7 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   pass1.push("-c:v", options.encoder);
   pass1.push("-crf", options.crf.toString());
   pass1.push("-preset", options.preset);
-  const x265ParamsPass1 = buildX265ParamsWithPass(options, sourceInfo, 1, passLogFile);
+  const x265ParamsPass1 = buildX265ParamsWithPass(options, sourceInfo, 1, passLogFile, cpuCapabilities);
   if (x265ParamsPass1) {
     pass1.push("-x265-params", x265ParamsPass1);
   }
@@ -5876,7 +6187,7 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   pass2.push("-c:v", options.encoder);
   pass2.push("-crf", options.crf.toString());
   pass2.push("-preset", options.preset);
-  const x265ParamsPass2 = buildX265ParamsWithPass(options, sourceInfo, 2, passLogFile);
+  const x265ParamsPass2 = buildX265ParamsWithPass(options, sourceInfo, 2, passLogFile, cpuCapabilities);
   if (x265ParamsPass2) {
     pass2.push("-x265-params", x265ParamsPass2);
   }
@@ -5903,7 +6214,7 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   pass2.push(outputPath);
   return { pass1, pass2, passLogFile };
 }
-function buildX265ParamsWithPass(options, sourceInfo, passNumber, statsFile) {
+function buildX265ParamsWithPass(options, sourceInfo, passNumber, statsFile, cpuCapabilities) {
   const params = [];
   params.push(`pass=${passNumber}`);
   params.push(`stats=${statsFile}.log`);
@@ -5920,12 +6231,23 @@ function buildX265ParamsWithPass(options, sourceInfo, passNumber, statsFile) {
   if (sourceInfo.isHdr) {
     params.push("hdr10=1");
     params.push("hdr10-opt=1");
+    const masterDisplayStr = buildMasterDisplayString(sourceInfo.masteringDisplay);
+    if (masterDisplayStr) {
+      params.push(`master-display=${masterDisplayStr}`);
+    }
+    const maxCllStr = buildMaxCllString(sourceInfo.contentLightLevel);
+    if (maxCllStr) {
+      params.push(`max-cll=${maxCllStr}`);
+    }
   }
   params.push("aq-mode=3");
   if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
     params.push("level-idc=51");
   } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
     params.push("level-idc=41");
+  }
+  if (cpuCapabilities?.avx512) {
+    params.push("asm=avx512");
   }
   return params.join(":");
 }
@@ -5993,7 +6315,7 @@ function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   args.push(outputPath);
   return args;
 }
-function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
+function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapabilities) {
   const args = [];
   args.push("-i", inputPath);
   if (config.threadLimit > 0) {
@@ -6002,7 +6324,7 @@ function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   args.push("-c:v", config.h265.encoder);
   args.push("-crf", config.h265.crf.toString());
   args.push("-preset", config.h265.preset);
-  const x265Params = buildX265Params(config.h265, sourceInfo);
+  const x265Params = buildX265Params(config.h265, sourceInfo, cpuCapabilities);
   if (x265Params) {
     args.push("-x265-params", x265Params);
   }
@@ -6075,12 +6397,20 @@ function buildSvtAv1Params(options, sourceInfo) {
   params.push("lookahead=120");
   if (sourceInfo.isHdr) {
     params.push("enable-hdr=1");
+    const masterDisplayStr = buildMasterDisplayString(sourceInfo.masteringDisplay);
+    if (masterDisplayStr) {
+      params.push(`mastering-display=${masterDisplayStr}`);
+    }
+    const maxCllStr = buildMaxCllString(sourceInfo.contentLightLevel);
+    if (maxCllStr) {
+      params.push(`content-light=${maxCllStr}`);
+    }
   }
   params.push("fast-decode=0");
   params.push("enable-tf=1");
   return params.join(":");
 }
-function buildX265Params(options, sourceInfo) {
+function buildX265Params(options, sourceInfo, cpuCapabilities) {
   const params = [];
   params.push(`keyint=${options.keyframeInterval}`);
   params.push(`min-keyint=${Math.min(options.keyframeInterval, 25)}`);
@@ -6092,6 +6422,14 @@ function buildX265Params(options, sourceInfo) {
   if (sourceInfo.isHdr) {
     params.push("hdr10=1");
     params.push("hdr10-opt=1");
+    const masterDisplayStr = buildMasterDisplayString(sourceInfo.masteringDisplay);
+    if (masterDisplayStr) {
+      params.push(`master-display=${masterDisplayStr}`);
+    }
+    const maxCllStr = buildMaxCllString(sourceInfo.contentLightLevel);
+    if (maxCllStr) {
+      params.push(`max-cll=${maxCllStr}`);
+    }
   }
   params.push("aq-mode=3");
   if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
@@ -6099,12 +6437,37 @@ function buildX265Params(options, sourceInfo) {
   } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
     params.push("level-idc=41");
   }
+  if (cpuCapabilities?.avx512) {
+    params.push("asm=avx512");
+  }
   return params.join(":");
+}
+function buildMasterDisplayString(metadata) {
+  if (!metadata) return null;
+  if (!metadata.greenX || !metadata.blueX || !metadata.redX) return null;
+  const maxL = Math.round(metadata.maxLuminance * 1e4);
+  const minL = Math.round(metadata.minLuminance * 1e4);
+  return `G(${metadata.greenX},${metadata.greenY})B(${metadata.blueX},${metadata.blueY})R(${metadata.redX},${metadata.redY})WP(${metadata.whitePointX},${metadata.whitePointY})L(${maxL},${minL})`;
+}
+function buildMaxCllString(metadata) {
+  if (!metadata) return null;
+  if (metadata.maxCll === 0 && metadata.maxFall === 0) return null;
+  return `${metadata.maxCll},${metadata.maxFall}`;
 }
 function buildHdrArgsH265(sourceInfo) {
   const args = [];
   args.push("-pix_fmt", "yuv420p10le");
-  if (sourceInfo.colorSpace) {
+  if (sourceInfo.colorPrimaries || sourceInfo.colorTransfer || sourceInfo.colorMatrix) {
+    if (sourceInfo.colorPrimaries) {
+      args.push("-color_primaries", sourceInfo.colorPrimaries);
+    }
+    if (sourceInfo.colorTransfer) {
+      args.push("-color_trc", sourceInfo.colorTransfer);
+    }
+    if (sourceInfo.colorMatrix) {
+      args.push("-colorspace", sourceInfo.colorMatrix);
+    }
+  } else if (sourceInfo.colorSpace) {
     const colorParams = parseColorSpace(sourceInfo.colorSpace);
     if (colorParams.primaries) {
       args.push("-color_primaries", colorParams.primaries);
@@ -6125,7 +6488,17 @@ function buildHdrArgsH265(sourceInfo) {
 function buildHdrArgs(sourceInfo) {
   const args = [];
   args.push("-pix_fmt", "yuv420p10le");
-  if (sourceInfo.colorSpace) {
+  if (sourceInfo.colorPrimaries || sourceInfo.colorTransfer || sourceInfo.colorMatrix) {
+    if (sourceInfo.colorPrimaries) {
+      args.push("-color_primaries", sourceInfo.colorPrimaries);
+    }
+    if (sourceInfo.colorTransfer) {
+      args.push("-color_trc", sourceInfo.colorTransfer);
+    }
+    if (sourceInfo.colorMatrix) {
+      args.push("-colorspace", sourceInfo.colorMatrix);
+    }
+  } else if (sourceInfo.colorSpace) {
     const colorParams = parseColorSpace(sourceInfo.colorSpace);
     if (colorParams.primaries) {
       args.push("-color_primaries", colorParams.primaries);
@@ -6547,9 +6920,38 @@ class ArchivalService {
     this.encodingStartTime = 0;
     this.speedSamples = [];
     this.maxSpeedSamples = 10;
+    this.cpuCapabilities = null;
+    this.cpuCapabilitiesDetected = false;
     this.whisperModelPathGetter = null;
     this.whisperProviderGetter = null;
     this.whisperGpuEnabledGetter = null;
+  }
+  /**
+   * Detect and cache CPU SIMD capabilities
+   * Called lazily on first encoding job
+   */
+  async ensureCpuCapabilities() {
+    if (this.cpuCapabilitiesDetected) {
+      return this.cpuCapabilities;
+    }
+    try {
+      this.cpuCapabilities = await detectCPUSIMDCapabilities();
+      this.cpuCapabilitiesDetected = true;
+      if (this.cpuCapabilities) {
+        this.logger.info("CPU capabilities detected", {
+          architecture: this.cpuCapabilities.architecture,
+          avx512: this.cpuCapabilities.avx512,
+          avx2: this.cpuCapabilities.avx2,
+          neon: this.cpuCapabilities.neon,
+          sve: this.cpuCapabilities.sve,
+          model: this.cpuCapabilities.cpuModel
+        });
+      }
+    } catch (error2) {
+      this.logger.warn("Failed to detect CPU capabilities", { error: error2 });
+      this.cpuCapabilitiesDetected = true;
+    }
+    return this.cpuCapabilities;
   }
   /**
    * Set the function to get the Whisper model path from settings
@@ -7074,11 +7476,18 @@ class ArchivalService {
       hdrFormat: extendedMeta.hdrFormat,
       isHdr,
       bitrate: meta.bitrate ?? void 0,
-      audioCodec: extendedMeta.audioCodec
+      audioCodec: extendedMeta.audioCodec,
+      // HDR10 static metadata
+      masteringDisplay: extendedMeta.masteringDisplay,
+      contentLightLevel: extendedMeta.contentLightLevel,
+      // Individual color components for precise encoder configuration
+      colorPrimaries: extendedMeta.colorPrimaries,
+      colorTransfer: extendedMeta.colorTransfer,
+      colorMatrix: extendedMeta.colorMatrix
     };
   }
   /**
-   * Get extended metadata including HDR info and audio codec
+   * Get extended metadata including HDR info, HDR10 static metadata, and audio codec
    */
   async getExtendedMetadata(filePath) {
     const ffprobePath = resolveBundledBinary("ffprobe");
@@ -7089,6 +7498,10 @@ class ArchivalService {
         "-print_format",
         "json",
         "-show_streams",
+        "-show_frames",
+        "-read_intervals",
+        "%+#1",
+        // Read first frame for side_data
         filePath
       ]);
       let stdout = "";
@@ -7105,27 +7518,67 @@ class ArchivalService {
             return;
           }
           const bitDepth = videoStream.bits_per_raw_sample ? parseInt(videoStream.bits_per_raw_sample, 10) : void 0;
-          const colorParts = [
-            videoStream.color_primaries,
-            videoStream.color_transfer,
-            videoStream.color_space
-          ].filter(Boolean);
+          const colorPrimaries = videoStream.color_primaries;
+          const colorTransfer = videoStream.color_transfer;
+          const colorMatrix = videoStream.color_space;
+          const colorParts = [colorPrimaries, colorTransfer, colorMatrix].filter(Boolean);
           const colorSpace = colorParts.length > 0 ? colorParts.join("/") : void 0;
           let hdrFormat = null;
-          if (videoStream.side_data_list) {
-            for (const sideData of videoStream.side_data_list) {
-              if (sideData.side_data_type?.includes("HDR")) {
-                hdrFormat = sideData.side_data_type;
-                break;
-              }
-              if (sideData.side_data_type?.includes("Dolby")) {
-                hdrFormat = "Dolby Vision";
-                break;
+          let masteringDisplay;
+          let contentLightLevel;
+          const allSideData = [
+            ...videoStream.side_data_list || [],
+            ...parsed.frames?.[0]?.side_data_list || []
+          ];
+          for (const sideData of allSideData) {
+            const sideDataType = sideData.side_data_type?.toLowerCase() || "";
+            if (sideDataType.includes("mastering display") || sideDataType.includes("hdr")) {
+              if (!hdrFormat) hdrFormat = "HDR10";
+              if (sideData.red_x && sideData.green_x && sideData.blue_x) {
+                const parseCoord = (val) => {
+                  if (!val) return 0;
+                  if (val.includes("/")) {
+                    const [num, den] = val.split("/");
+                    return Math.round(parseInt(num, 10) / parseInt(den, 10) * 5e4);
+                  }
+                  return parseInt(val, 10);
+                };
+                const parseLuminance = (val) => {
+                  if (!val) return 0;
+                  if (val.includes("/")) {
+                    const [num, den] = val.split("/");
+                    return parseInt(num, 10) / parseInt(den, 10);
+                  }
+                  return parseFloat(val);
+                };
+                masteringDisplay = {
+                  redX: parseCoord(sideData.red_x),
+                  redY: parseCoord(sideData.red_y),
+                  greenX: parseCoord(sideData.green_x),
+                  greenY: parseCoord(sideData.green_y),
+                  blueX: parseCoord(sideData.blue_x),
+                  blueY: parseCoord(sideData.blue_y),
+                  whitePointX: parseCoord(sideData.white_point_x),
+                  whitePointY: parseCoord(sideData.white_point_y),
+                  maxLuminance: parseLuminance(sideData.max_luminance),
+                  minLuminance: parseLuminance(sideData.min_luminance)
+                };
               }
             }
+            if (sideDataType.includes("content light level")) {
+              if (sideData.max_content !== void 0 && sideData.max_average !== void 0) {
+                contentLightLevel = {
+                  maxCll: sideData.max_content,
+                  maxFall: sideData.max_average
+                };
+              }
+            }
+            if (sideDataType.includes("dolby")) {
+              hdrFormat = "Dolby Vision";
+            }
           }
-          if (!hdrFormat && videoStream.color_transfer) {
-            const transfer = videoStream.color_transfer.toLowerCase();
+          if (!hdrFormat && colorTransfer) {
+            const transfer = colorTransfer.toLowerCase();
             if (transfer.includes("smpte2084") || transfer.includes("pq")) {
               hdrFormat = "HDR10";
             } else if (transfer.includes("arib-std-b67") || transfer.includes("hlg")) {
@@ -7133,7 +7586,17 @@ class ArchivalService {
             }
           }
           const audioCodec = audioStream?.codec_name;
-          resolve({ bitDepth, colorSpace, hdrFormat, audioCodec });
+          resolve({
+            bitDepth,
+            colorSpace,
+            hdrFormat,
+            audioCodec,
+            colorPrimaries,
+            colorTransfer,
+            colorMatrix,
+            masteringDisplay,
+            contentLightLevel
+          });
         } catch {
           resolve({});
         }
@@ -7150,16 +7613,17 @@ class ArchivalService {
       throw new Error("No active job");
     }
     const config = this.activeJob.config;
+    const cpuCapabilities = await this.ensureCpuCapabilities();
     if (isTwoPassEnabled(config)) {
-      await this.encodeTwoPass(item, sourceInfo);
+      await this.encodeTwoPass(item, sourceInfo, cpuCapabilities);
     } else {
-      await this.encodeSinglePass(item, sourceInfo);
+      await this.encodeSinglePass(item, sourceInfo, cpuCapabilities);
     }
   }
   /**
    * Perform two-pass encoding
    */
-  async encodeTwoPass(item, sourceInfo) {
+  async encodeTwoPass(item, sourceInfo, cpuCapabilities) {
     if (!this.activeJob) {
       throw new Error("No active job");
     }
@@ -7173,7 +7637,8 @@ class ArchivalService {
         item.outputPath,
         config,
         sourceInfo,
-        passLogDir
+        passLogDir,
+        cpuCapabilities
       );
       this.logger.info("Starting two-pass encoding - Pass 1", { input: basename(item.inputPath) });
       this.emitEvent({
@@ -7321,7 +7786,7 @@ class ArchivalService {
   /**
    * Perform single-pass encoding (original implementation)
    */
-  encodeSinglePass(item, sourceInfo) {
+  encodeSinglePass(item, sourceInfo, cpuCapabilities) {
     return new Promise((resolve, reject) => {
       if (!this.activeJob) {
         reject(new Error("No active job"));
@@ -7333,7 +7798,8 @@ class ArchivalService {
         item.inputPath,
         item.outputPath,
         this.activeJob.config,
-        sourceInfo
+        sourceInfo,
+        cpuCapabilities
       );
       args.unshift("-progress", "pipe:1", "-nostats");
       this.logger.debug("Starting FFmpeg", { args: args.join(" ") });

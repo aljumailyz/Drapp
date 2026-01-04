@@ -22,7 +22,7 @@ type DownloadResult = {
 
 type BinaryDownloadInfo = {
   url: string
-  archiveType: 'exe' | 'zip' | '7z'
+  archiveType: 'exe' | 'zip' | '7z' | 'tar.xz'
   pathInArchive?: string
 }
 
@@ -42,7 +42,8 @@ const DOWNLOAD_URLS: Record<string, Record<BinaryName, BinaryDownloadInfo | null
       archiveType: 'zip',
       pathInArchive: 'ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe'
     },
-    whisper: null // Whisper.cpp requires manual setup - too complex for auto-download
+    whisper: null, // Whisper.cpp requires manual setup - too complex for auto-download
+    'faster-whisper': null // Python package - install via: pip install faster-whisper
   },
   darwin: {
     'yt-dlp': {
@@ -59,16 +60,28 @@ const DOWNLOAD_URLS: Record<string, Record<BinaryName, BinaryDownloadInfo | null
       archiveType: 'zip',
       pathInArchive: 'ffprobe'
     },
-    whisper: null
+    whisper: null,
+    'faster-whisper': null // Python package - install via: pip install faster-whisper
   },
   linux: {
     'yt-dlp': {
       url: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp',
       archiveType: 'exe'
     },
-    ffmpeg: null, // Linux users should use package manager
-    ffprobe: null,
-    whisper: null
+    // BtbN provides static FFmpeg builds for Linux (same source as Windows builds)
+    // These are fully static and include all common codecs (x264, x265, av1, etc.)
+    ffmpeg: {
+      url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz',
+      archiveType: 'tar.xz',
+      pathInArchive: 'ffmpeg-master-latest-linux64-gpl/bin/ffmpeg'
+    },
+    ffprobe: {
+      url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz',
+      archiveType: 'tar.xz',
+      pathInArchive: 'ffmpeg-master-latest-linux64-gpl/bin/ffprobe'
+    },
+    whisper: null,
+    'faster-whisper': null // Python package - install via: pip install faster-whisper
   }
 }
 
@@ -192,7 +205,12 @@ class BinaryDownloaderService {
     }
 
     // Archive download
-    const archiveExt = info.archiveType === 'zip' ? '.zip' : '.7z'
+    const archiveExtMap: Record<string, string> = {
+      'zip': '.zip',
+      '7z': '.7z',
+      'tar.xz': '.tar.xz'
+    }
+    const archiveExt = archiveExtMap[info.archiveType] || '.zip'
     const archivePath = join(tempDir, `drapp-${binary}${archiveExt}`)
 
     // Check if we already have this archive cached
@@ -264,6 +282,8 @@ class BinaryDownloaderService {
 
     if (info.archiveType === 'zip') {
       await this.extractFromZip(archivePath, info.pathInArchive!, targetPath)
+    } else if (info.archiveType === 'tar.xz') {
+      await this.extractFromTarXz(archivePath, info.pathInArchive!, targetPath)
     }
 
     // Make executable on Unix
@@ -347,6 +367,57 @@ class BinaryDownloaderService {
       })
 
       unzip.on('error', reject)
+    })
+  }
+
+  /**
+   * Extract a file from a tar.xz archive (used for Linux FFmpeg builds)
+   * Uses the system 'tar' command which handles .xz decompression natively
+   */
+  private async extractFromTarXz(
+    tarPath: string,
+    pathInArchive: string,
+    targetPath: string
+  ): Promise<void> {
+    const tempExtractDir = join(app.getPath('temp'), `drapp-extract-${Date.now()}`)
+    await mkdir(tempExtractDir, { recursive: true })
+
+    return new Promise((resolve, reject) => {
+      // Extract using tar with xz decompression
+      // -x: extract, -J: use xz decompression, -f: archive file
+      // --strip-components removes leading directory components
+      const tar = spawn('tar', [
+        '-xJf', tarPath,
+        '-C', tempExtractDir,
+        pathInArchive
+      ], { stdio: 'pipe' })
+
+      let stderr = ''
+      tar.stderr.on('data', (data) => { stderr += data.toString() })
+
+      tar.on('close', async (code) => {
+        if (code === 0) {
+          try {
+            const extractedPath = join(tempExtractDir, pathInArchive)
+            await rename(extractedPath, targetPath)
+
+            // Clean up temp directory
+            const { rm } = await import('node:fs/promises')
+            await rm(tempExtractDir, { recursive: true, force: true }).catch(() => {})
+
+            resolve()
+          } catch (error) {
+            reject(error)
+          }
+        } else {
+          reject(new Error(`tar extraction failed with code ${code}: ${stderr}`))
+        }
+      })
+
+      tar.on('error', (error) => {
+        // If tar command fails, try alternative approach
+        reject(new Error(`tar command failed: ${error.message}. Please install tar or xz-utils.`))
+      })
     })
   }
 
