@@ -998,15 +998,21 @@ function VideoTab({
         {/* CPU SIMD Capabilities Indicator */}
         {config.hwAccel === 'none' && cpuCapabilities && (
           (() => {
-            // Determine which badge to show
+            // Determine architecture and best available SIMD
+            const isARM = cpuCapabilities.architecture === 'arm64'
             const isAppleSilicon = cpuCapabilities.cpuModel?.toLowerCase().includes('apple')
-            const hasAnyOptimization = cpuCapabilities.avx512 || cpuCapabilities.avx2 || cpuCapabilities.avx || isAppleSilicon
 
-            if (!hasAnyOptimization) return null
+            // Check if we have any optimizations worth showing
+            const hasX86Optimization = cpuCapabilities.avx512 || cpuCapabilities.avx2 || cpuCapabilities.avx
+            const hasARMOptimization = cpuCapabilities.sve2 || cpuCapabilities.sve || cpuCapabilities.neon
+
+            if (!hasX86Optimization && !hasARMOptimization) return null
 
             return (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <span className="text-xs text-slate-500">CPU optimizations:</span>
+
+                {/* x86 SIMD badges */}
                 {cpuCapabilities.avx512 && (
                   <Tooltip
                     content={
@@ -1058,13 +1064,63 @@ function VideoTab({
                     AVX
                   </span>
                 )}
-                {isAppleSilicon && !cpuCapabilities.avx && (
+
+                {/* ARM SIMD badges - SVE2 (best), SVE, or NEON */}
+                {isARM && cpuCapabilities.sve2 && (
                   <Tooltip
                     content={
                       <>
-                        <TooltipHeading>ARM NEON Active</TooltipHeading>
+                        <TooltipHeading>SVE2 Active</TooltipHeading>
                         <TooltipText>
-                          Apple Silicon uses ARM NEON SIMD for optimized software encoding.
+                          Your ARM CPU supports SVE2 (Scalable Vector Extension 2) for optimized software encoding. This is the ARM equivalent of AVX-512.
+                        </TooltipText>
+                        {cpuCapabilities.cpuModel && (
+                          <p className="mt-1 text-xs text-slate-400">{cpuCapabilities.cpuModel}</p>
+                        )}
+                      </>
+                    }
+                    position="bottom"
+                  >
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                      <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      SVE2
+                    </span>
+                  </Tooltip>
+                )}
+                {isARM && cpuCapabilities.sve && !cpuCapabilities.sve2 && (
+                  <Tooltip
+                    content={
+                      <>
+                        <TooltipHeading>SVE Active</TooltipHeading>
+                        <TooltipText>
+                          Your ARM CPU supports SVE (Scalable Vector Extension) for optimized software encoding. Used in AWS Graviton3, Fujitsu A64FX, and similar chips.
+                        </TooltipText>
+                        {cpuCapabilities.cpuModel && (
+                          <p className="mt-1 text-xs text-slate-400">{cpuCapabilities.cpuModel}</p>
+                        )}
+                      </>
+                    }
+                    position="bottom"
+                  >
+                    <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700">
+                      <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      SVE
+                    </span>
+                  </Tooltip>
+                )}
+                {isARM && cpuCapabilities.neon && !cpuCapabilities.sve && !cpuCapabilities.sve2 && (
+                  <Tooltip
+                    content={
+                      <>
+                        <TooltipHeading>{isAppleSilicon ? 'ARM NEON Active' : 'NEON Active'}</TooltipHeading>
+                        <TooltipText>
+                          {isAppleSilicon
+                            ? 'Apple Silicon uses ARM NEON SIMD for optimized software encoding.'
+                            : 'Your ARM CPU supports NEON SIMD for optimized software encoding.'}
                         </TooltipText>
                         {cpuCapabilities.cpuModel && (
                           <p className="mt-1 text-xs text-slate-400">{cpuCapabilities.cpuModel}</p>
@@ -1077,7 +1133,7 @@ function VideoTab({
                       <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
                         <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                       </svg>
-                      ARM NEON
+                      {isAppleSilicon ? 'ARM NEON' : 'NEON'}
                     </span>
                   </Tooltip>
                 )}

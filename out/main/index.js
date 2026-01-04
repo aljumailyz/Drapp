@@ -2541,6 +2541,7 @@ async function detectAMDGPU() {
 async function detectCPUSIMDCapabilities() {
   const platform2 = os$1.platform();
   const capabilities = {
+    // x86
     sse: false,
     sse2: false,
     sse3: false,
@@ -2550,7 +2551,13 @@ async function detectCPUSIMDCapabilities() {
     avx: false,
     avx2: false,
     avx512: false,
-    cpuModel: null
+    // ARM
+    neon: false,
+    sve: false,
+    sve2: false,
+    // Info
+    cpuModel: null,
+    architecture: "unknown"
   };
   try {
     if (platform2 === "win32") {
@@ -2641,33 +2648,80 @@ async function detectWindowsCPUCapabilities(capabilities) {
   } catch {
     console.warn("PowerShell CPU detection failed, using baseline assumptions");
   }
-  capabilities.sse = true;
-  capabilities.sse2 = true;
-  capabilities.sse3 = true;
-  capabilities.ssse3 = true;
-  capabilities.sse41 = true;
-  capabilities.sse42 = true;
-  capabilities.avx = true;
-  capabilities.avx2 = true;
+  const arch2 = os$1.arch();
+  if (arch2 === "arm64") {
+    capabilities.architecture = "arm64";
+    capabilities.neon = true;
+    capabilities.sse = false;
+    capabilities.sse2 = false;
+    capabilities.sse3 = false;
+    capabilities.ssse3 = false;
+    capabilities.sse41 = false;
+    capabilities.sse42 = false;
+    capabilities.avx = false;
+    capabilities.avx2 = false;
+    capabilities.avx512 = false;
+  } else {
+    capabilities.architecture = "x86_64";
+    capabilities.sse = true;
+    capabilities.sse2 = true;
+    capabilities.sse3 = true;
+    capabilities.ssse3 = true;
+    capabilities.sse41 = true;
+    capabilities.sse42 = true;
+    capabilities.avx = true;
+    capabilities.avx2 = true;
+  }
 }
 async function detectLinuxCPUCapabilities(capabilities) {
   const { stdout } = await execFileAsync("cat", ["/proc/cpuinfo"], {
     timeout: 5e3
   });
-  const modelMatch = stdout.match(/model name\s*:\s*(.+)/i);
-  capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null;
-  const flagsMatch = stdout.match(/^flags\s*:\s*(.+)$/im);
-  if (flagsMatch) {
-    const flags = ` ${flagsMatch[1].toLowerCase()} `;
-    capabilities.sse = / sse /.test(flags);
-    capabilities.sse2 = / sse2 /.test(flags);
-    capabilities.sse3 = / sse3 /.test(flags) || / pni /.test(flags);
-    capabilities.ssse3 = / ssse3 /.test(flags);
-    capabilities.sse41 = / sse4_1 /.test(flags);
-    capabilities.sse42 = / sse4_2 /.test(flags);
-    capabilities.avx = / avx /.test(flags);
-    capabilities.avx2 = / avx2 /.test(flags);
-    capabilities.avx512 = /avx512/.test(flags);
+  const arch2 = os$1.arch();
+  const isARM = arch2 === "arm64" || arch2 === "aarch64";
+  if (isARM) {
+    capabilities.architecture = "arm64";
+    const modelMatch = stdout.match(/model name\s*:\s*(.+)/i) || stdout.match(/Hardware\s*:\s*(.+)/i) || stdout.match(/CPU implementer\s*:\s*(.+)/i);
+    capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null;
+    const featuresMatch = stdout.match(/^Features\s*:\s*(.+)$/im);
+    if (featuresMatch) {
+      const features = ` ${featuresMatch[1].toLowerCase()} `;
+      capabilities.neon = / asimd /.test(features) || / neon /.test(features);
+      if (!capabilities.neon) {
+        capabilities.neon = true;
+      }
+      capabilities.sve = / sve /.test(features);
+      capabilities.sve2 = / sve2 /.test(features);
+    } else {
+      capabilities.neon = true;
+    }
+    if (!capabilities.cpuModel) {
+      try {
+        const { stdout: lscpuOut } = await execFileAsync("lscpu", [], { timeout: 3e3 });
+        const modelNameMatch = lscpuOut.match(/Model name:\s*(.+)/i);
+        if (modelNameMatch) {
+          capabilities.cpuModel = modelNameMatch[1].trim();
+        }
+      } catch {
+      }
+    }
+  } else {
+    capabilities.architecture = "x86_64";
+    const modelMatch = stdout.match(/model name\s*:\s*(.+)/i);
+    capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null;
+    const flagsMatch = stdout.match(/^flags\s*:\s*(.+)$/im);
+    if (flagsMatch) {
+      const flags = ` ${flagsMatch[1].toLowerCase()} `;
+      capabilities.sse = / sse /.test(flags);
+      capabilities.sse2 = / sse2 /.test(flags);
+      capabilities.sse3 = / sse3 /.test(flags) || / pni /.test(flags);
+      capabilities.ssse3 = / ssse3 /.test(flags);
+      capabilities.sse41 = / sse4_1 /.test(flags);
+      capabilities.sse42 = / sse4_2 /.test(flags);
+      capabilities.avx = / avx /.test(flags);
+      capabilities.avx2 = / avx2 /.test(flags);
+      capabilities.avx512 = /avx512/.test(flags);
+    }
   }
 }
 async function detectMacOSCPUCapabilities(capabilities) {
@@ -2675,6 +2729,7 @@ async function detectMacOSCPUCapabilities(capabilities) {
     const { stdout: archOutput } = await execFileAsync("uname", ["-m"], { timeout: 2e3 });
     const isAppleSilicon = archOutput.trim().toLowerCase() === "arm64";
     if (isAppleSilicon) {
+      capabilities.architecture = "arm64";
       try {
         const { stdout: brandOutput } = await execFileAsync(
           "sysctl",
@@ -2683,12 +2738,25 @@ async function detectMacOSCPUCapabilities(capabilities) {
         );
         capabilities.cpuModel = brandOutput.trim() || "Apple Silicon";
       } catch {
-        capabilities.cpuModel = "Apple Silicon";
+        try {
+          const { stdout: chipOutput } = await execFileAsync(
+            "sysctl",
+            ["-n", "hw.chip"],
+            { timeout: 2e3 }
+          );
+          capabilities.cpuModel = chipOutput.trim() || "Apple Silicon";
+        } catch {
+          capabilities.cpuModel = "Apple Silicon";
+        }
       }
+      capabilities.neon = true;
+      capabilities.sve = false;
+      capabilities.sve2 = false;
       return;
     }
   } catch {
   }
+  capabilities.architecture = "x86_64";
   try {
     const { stdout: brandOutput } = await execFileAsync(
       "sysctl",

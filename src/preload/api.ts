@@ -536,6 +536,7 @@ export type ProcessingCancelResponse = {
 }
 
 export type CPUSIMDCapabilities = {
+  // x86 SIMD extensions
   sse: boolean
   sse2: boolean
   sse3: boolean
@@ -545,7 +546,13 @@ export type CPUSIMDCapabilities = {
   avx: boolean
   avx2: boolean
   avx512: boolean
+  // ARM SIMD extensions
+  neon: boolean
+  sve: boolean
+  sve2: boolean
+  // CPU info
   cpuModel: string | null
+  architecture: 'x86_64' | 'arm64' | 'unknown'
 }
 
 export type HWAccelDetectResponse = {

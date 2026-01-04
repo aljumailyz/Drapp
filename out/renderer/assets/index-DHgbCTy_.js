@@ -13773,9 +13773,11 @@ function VideoTab({
             hw.id
           )) }),
           config.hwAccel === "none" && cpuCapabilities && (() => {
+            const isARM = cpuCapabilities.architecture === "arm64";
             const isAppleSilicon = cpuCapabilities.cpuModel?.toLowerCase().includes("apple");
-            const hasAnyOptimization = cpuCapabilities.avx512 || cpuCapabilities.avx2 || cpuCapabilities.avx || isAppleSilicon;
-            if (!hasAnyOptimization) return null;
+            const hasX86Optimization = cpuCapabilities.avx512 || cpuCapabilities.avx2 || cpuCapabilities.avx;
+            const hasARMOptimization = cpuCapabilities.sve2 || cpuCapabilities.sve || cpuCapabilities.neon;
+            if (!hasX86Optimization && !hasARMOptimization) return null;
             return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-3 flex flex-wrap items-center gap-2", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs text-slate-500", children: "CPU optimizations:" }),
               cpuCapabilities.avx512 && /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -13809,18 +13811,48 @@ function VideoTab({
                 }
               ),
               cpuCapabilities.avx && !cpuCapabilities.avx2 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600", children: "AVX" }),
-              isAppleSilicon && !cpuCapabilities.avx && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              isARM && cpuCapabilities.sve2 && /* @__PURE__ */ jsxRuntimeExports.jsx(
                 Tooltip,
                 {
                   content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: "ARM NEON Active" }),
-                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: "Apple Silicon uses ARM NEON SIMD for optimized software encoding." }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: "SVE2 Active" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: "Your ARM CPU supports SVE2 (Scalable Vector Extension 2) for optimized software encoding. This is the ARM equivalent of AVX-512." }),
+                    cpuCapabilities.cpuModel && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-slate-400", children: cpuCapabilities.cpuModel })
+                  ] }),
+                  position: "bottom",
+                  children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { className: "h-3 w-3", fill: "currentColor", viewBox: "0 0 20 20", children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { fillRule: "evenodd", d: "M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z", clipRule: "evenodd" }) }),
+                    "SVE2"
+                  ] })
+                }
+              ),
+              isARM && cpuCapabilities.sve && !cpuCapabilities.sve2 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                Tooltip,
+                {
+                  content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: "SVE Active" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: "Your ARM CPU supports SVE (Scalable Vector Extension) for optimized software encoding. Used in AWS Graviton3, Fujitsu A64FX, and similar chips." }),
+                    cpuCapabilities.cpuModel && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-slate-400", children: cpuCapabilities.cpuModel })
+                  ] }),
+                  position: "bottom",
+                  children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "inline-flex items-center gap-1 rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { className: "h-3 w-3", fill: "currentColor", viewBox: "0 0 20 20", children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { fillRule: "evenodd", d: "M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z", clipRule: "evenodd" }) }),
+                    "SVE"
+                  ] })
+                }
+              ),
+              isARM && cpuCapabilities.neon && !cpuCapabilities.sve && !cpuCapabilities.sve2 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                Tooltip,
+                {
+                  content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: isAppleSilicon ? "ARM NEON Active" : "NEON Active" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: isAppleSilicon ? "Apple Silicon uses ARM NEON SIMD for optimized software encoding." : "Your ARM CPU supports NEON SIMD for optimized software encoding." }),
                     cpuCapabilities.cpuModel && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-slate-400", children: cpuCapabilities.cpuModel })
                   ] }),
                   position: "bottom",
                   children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700", children: [
                     /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { className: "h-3 w-3", fill: "currentColor", viewBox: "0 0 20 20", children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { fillRule: "evenodd", d: "M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z", clipRule: "evenodd" }) }),
-                    "ARM NEON"
+                    isAppleSilicon ? "ARM NEON" : "NEON"
                   ] })
                 }
               )

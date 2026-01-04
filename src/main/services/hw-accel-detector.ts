@@ -6,6 +6,7 @@ import type { HWAccelerator } from '../../shared/types/encoding.types'
 const execFileAsync = promisify(execFile)
 
 export type CPUSIMDCapabilities = {
+  // x86 SIMD extensions
   sse: boolean
   sse2: boolean
   sse3: boolean
@@ -15,7 +16,13 @@ export type CPUSIMDCapabilities = {
   avx: boolean
   avx2: boolean
   avx512: boolean
+  // ARM SIMD extensions
+  neon: boolean
+  sve: boolean
+  sve2: boolean
+  // CPU info
   cpuModel: string | null
+  architecture: 'x86_64' | 'arm64' | 'unknown'
 }
 
 export type HWAccelInfo = {
@@ -190,6 +197,7 @@ export async function detectCPUSIMDCapabilities(): Promise<CPUSIMDCapabilities |
   const platform = os.platform()
 
   const capabilities: CPUSIMDCapabilities = {
+    // x86
     sse: false,
     sse2: false,
     sse3: false,
@@ -199,7 +207,13 @@ export async function detectCPUSIMDCapabilities(): Promise<CPUSIMDCapabilities |
     avx: false,
     avx2: false,
     avx512: false,
-    cpuModel: null
+    // ARM
+    neon: false,
+    sve: false,
+    sve2: false,
+    // Info
+    cpuModel: null,
+    architecture: 'unknown'
   }
 
   try {
@@ -305,47 +319,120 @@ async function detectWindowsCPUCapabilities(capabilities: CPUSIMDCapabilities): 
     console.warn('PowerShell CPU detection failed, using baseline assumptions')
   }
 
-  // Modern x86-64 CPUs (2013+) have at least AVX2
-  // Set baseline capabilities for any modern CPU
-  capabilities.sse = true
-  capabilities.sse2 = true
-  capabilities.sse3 = true
-  capabilities.ssse3 = true
-  capabilities.sse41 = true
-  capabilities.sse42 = true
-  capabilities.avx = true
-  capabilities.avx2 = true
+  // Set architecture - Windows on ARM is rare but possible
+  const arch = os.arch()
+  if (arch === 'arm64') {
+    capabilities.architecture = 'arm64'
+    capabilities.neon = true // All ARM64 has NEON
+    // Windows on ARM doesn't expose SVE detection easily
+    // Reset x86 flags
+    capabilities.sse = false
+    capabilities.sse2 = false
+    capabilities.sse3 = false
+    capabilities.ssse3 = false
+    capabilities.sse41 = false
+    capabilities.sse42 = false
+    capabilities.avx = false
+    capabilities.avx2 = false
+    capabilities.avx512 = false
+  } else {
+    capabilities.architecture = 'x86_64'
+    // Modern x86-64 CPUs (2013+) have at least AVX2
+    // Set baseline capabilities for any modern CPU
+    capabilities.sse = true
+    capabilities.sse2 = true
+    capabilities.sse3 = true
+    capabilities.ssse3 = true
+    capabilities.sse41 = true
+    capabilities.sse42 = true
+    capabilities.avx = true
+    capabilities.avx2 = true
+  }
 }
 
 /**
  * Detect CPU capabilities on Linux by reading /proc/cpuinfo
+ * Supports both x86_64 and ARM64 architectures
  */
 async function detectLinuxCPUCapabilities(capabilities: CPUSIMDCapabilities): Promise<void> {
   const { stdout } = await execFileAsync('cat', ['/proc/cpuinfo'], {
     timeout: 5000
   })
 
-  // Extract CPU model
-  const modelMatch = stdout.match(/model name\s*:\s*(.+)/i)
-  capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null
+  // Detect architecture
+  const arch = os.arch()
+  const isARM = arch === 'arm64' || arch === 'aarch64'
 
-  // Extract flags line - more reliable than searching whole output
-  const flagsMatch = stdout.match(/^flags\s*:\s*(.+)$/im)
-  if (flagsMatch) {
-    const flags = ` ${flagsMatch[1].toLowerCase()} ` // Pad with spaces for word boundary matching
+  if (isARM) {
+    capabilities.architecture = 'arm64'
 
-    // Check for SIMD flags using word boundaries
-    capabilities.sse = / sse /.test(flags)
-    capabilities.sse2 = / sse2 /.test(flags)
-    capabilities.sse3 = / sse3 /.test(flags) || / pni /.test(flags)
-    capabilities.ssse3 = / ssse3 /.test(flags)
-    capabilities.sse41 = / sse4_1 /.test(flags)
-    capabilities.sse42 = / sse4_2 /.test(flags)
-    capabilities.avx = / avx /.test(flags)
-    capabilities.avx2 = / avx2 /.test(flags)
+    // ARM: Extract CPU model from "CPU part" or "model name" or "Hardware"
+    const modelMatch = stdout.match(/model name\s*:\s*(.+)/i) ||
+                       stdout.match(/Hardware\s*:\s*(.+)/i) ||
+                       stdout.match(/CPU implementer\s*:\s*(.+)/i)
+    capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null
 
-    // AVX-512 has multiple feature flags - check for any of them
-    capabilities.avx512 = /avx512/.test(flags)
+    // ARM: Look for Features line (different from x86 flags)
+    const featuresMatch = stdout.match(/^Features\s*:\s*(.+)$/im)
+    if (featuresMatch) {
+      const features = ` ${featuresMatch[1].toLowerCase()} `
+
+      // NEON/ASIMD is standard on all ARM64
+      capabilities.neon = / asimd /.test(features) || / neon /.test(features)
+      if (!capabilities.neon) {
+        // All ARM64 Linux systems have NEON, it might just not be listed
+        capabilities.neon = true
+      }
+
+      // SVE (Scalable Vector Extension) - ARM's answer to AVX-512
+      // Used in: Graviton3, A64FX, Neoverse V1
+      capabilities.sve = / sve /.test(features)
+
+      // SVE2 - Enhanced SVE, used in: Graviton4, Neoverse V2/N2, Google Axion
+      capabilities.sve2 = / sve2 /.test(features)
+    } else {
+      // If no Features line, assume basic NEON
+      capabilities.neon = true
+    }
+
+    // Try to get more specific CPU info for ARM
+    if (!capabilities.cpuModel) {
+      try {
+        const { stdout: lscpuOut } = await execFileAsync('lscpu', [], { timeout: 3000 })
+        const modelNameMatch = lscpuOut.match(/Model name:\s*(.+)/i)
+        if (modelNameMatch) {
+          capabilities.cpuModel = modelNameMatch[1].trim()
+        }
+      } catch {
+        // lscpu not available
+      }
+    }
+  } else {
+    // x86_64 detection
+    capabilities.architecture = 'x86_64'
+
+    // Extract CPU model
+    const modelMatch = stdout.match(/model name\s*:\s*(.+)/i)
+    capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null
+
+    // Extract flags line - more reliable than searching whole output
+    const flagsMatch = stdout.match(/^flags\s*:\s*(.+)$/im)
+    if (flagsMatch) {
+      const flags = ` ${flagsMatch[1].toLowerCase()} ` // Pad with spaces for word boundary matching
+
+      // Check for SIMD flags using word boundaries
+      capabilities.sse = / sse /.test(flags)
+      capabilities.sse2 = / sse2 /.test(flags)
+      capabilities.sse3 = / sse3 /.test(flags) || / pni /.test(flags)
+      capabilities.ssse3 = / ssse3 /.test(flags)
+      capabilities.sse41 = / sse4_1 /.test(flags)
+      capabilities.sse42 = / sse4_2 /.test(flags)
+      capabilities.avx = / avx /.test(flags)
+      capabilities.avx2 = / avx2 /.test(flags)
+
+      // AVX-512 has multiple feature flags - check for any of them
+      capabilities.avx512 = /avx512/.test(flags)
+    }
   }
 }
 
@@ -359,7 +446,9 @@ async function detectMacOSCPUCapabilities(capabilities: CPUSIMDCapabilities): Pr
     const isAppleSilicon = archOutput.trim().toLowerCase() === 'arm64'
 
     if (isAppleSilicon) {
-      // Apple Silicon - get CPU brand but no AVX support
+      capabilities.architecture = 'arm64'
+
+      // Apple Silicon - get CPU brand
       try {
         const { stdout: brandOutput } = await execFileAsync(
           'sysctl',
@@ -368,10 +457,25 @@ async function detectMacOSCPUCapabilities(capabilities: CPUSIMDCapabilities): Pr
         )
         capabilities.cpuModel = brandOutput.trim() || 'Apple Silicon'
       } catch {
-        capabilities.cpuModel = 'Apple Silicon'
+        // brand_string might not work on Apple Silicon, try chip info
+        try {
+          const { stdout: chipOutput } = await execFileAsync(
+            'sysctl',
+            ['-n', 'hw.chip'],
+            { timeout: 2000 }
+          )
+          capabilities.cpuModel = chipOutput.trim() || 'Apple Silicon'
+        } catch {
+          capabilities.cpuModel = 'Apple Silicon'
+        }
       }
 
-      // Apple Silicon uses NEON (ARM SIMD), not x86 SIMD extensions
+      // Apple Silicon uses NEON (ARM SIMD)
+      // Note: Apple Silicon does NOT support SVE - it uses Apple's custom AMX instead
+      capabilities.neon = true
+      capabilities.sve = false
+      capabilities.sve2 = false
+
       // All x86 SIMD capabilities remain false
       return
     }
@@ -380,6 +484,8 @@ async function detectMacOSCPUCapabilities(capabilities: CPUSIMDCapabilities): Pr
   }
 
   // Intel Mac - use sysctl to get CPU features
+  capabilities.architecture = 'x86_64'
+
   try {
     const { stdout: brandOutput } = await execFileAsync(
       'sysctl',
