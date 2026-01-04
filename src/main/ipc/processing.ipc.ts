@@ -275,7 +275,8 @@ export function registerProcessingHandlers(deps: ProcessingDeps = {}): void {
         recommended: result.recommended,
         platform: result.platform,
         gpuVendor: result.gpuVendor,
-        gpuModel: result.gpuModel
+        gpuModel: result.gpuModel,
+        cpuCapabilities: result.cpuCapabilities
       }
     } catch (error) {
       return {

@@ -19,7 +19,8 @@
       "Bash(Select-Object -Last 50)",
       "Bash(findstr:*)",
       "Bash(dir /s /b resources*ffmpeg*)",
-      "Bash(Select-Object -Last 60)"
+      "Bash(Select-Object -Last 60)",
+      "Bash(Select-Object -Last 20)"
     ]
   }
 }

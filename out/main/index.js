@@ -2476,12 +2476,14 @@ async function detectHWAccelerators(ffmpegPath) {
     console.warn("HW acceleration detection failed:", error2);
   }
   const recommended = getRecommendedAccelerator(available, platform2);
+  const cpuCapabilities = await detectCPUSIMDCapabilities();
   return {
     available,
     recommended,
     platform: platform2,
     gpuVendor,
-    gpuModel
+    gpuModel,
+    cpuCapabilities
   };
 }
 function getRecommendedAccelerator(available, platform2) {
@@ -2535,6 +2537,194 @@ async function detectAMDGPU() {
   } catch {
   }
   return null;
+}
+async function detectCPUSIMDCapabilities() {
+  const platform2 = os$1.platform();
+  const capabilities = {
+    sse: false,
+    sse2: false,
+    sse3: false,
+    ssse3: false,
+    sse41: false,
+    sse42: false,
+    avx: false,
+    avx2: false,
+    avx512: false,
+    cpuModel: null
+  };
+  try {
+    if (platform2 === "win32") {
+      await detectWindowsCPUCapabilities(capabilities);
+    } else if (platform2 === "linux") {
+      await detectLinuxCPUCapabilities(capabilities);
+    } else if (platform2 === "darwin") {
+      await detectMacOSCPUCapabilities(capabilities);
+    }
+  } catch (error2) {
+    console.warn("CPU SIMD detection failed:", error2);
+    return null;
+  }
+  return capabilities;
+}
+async function detectWindowsCPUCapabilities(capabilities) {
+  try {
+    const { stdout: cpuName } = await execFileAsync("wmic", ["cpu", "get", "name"], {
+      timeout: 5e3
+    });
+    const lines = cpuName.trim().split("\n").filter((l) => l.trim() && !l.includes("Name"));
+    capabilities.cpuModel = lines[0]?.trim() || null;
+  } catch {
+  }
+  try {
+    const { stdout: psOutput } = await execFileAsync("powershell", [
+      "-NoProfile",
+      "-Command",
+      `
+      $cpu = Get-CimInstance -ClassName Win32_Processor
+      $procName = $cpu.Name.ToLower()
+
+      # Conservative heuristics for AVX-512 capable CPUs
+      # Intel: Only specific generations have AVX-512 enabled
+      #   - Ice Lake (10th gen mobile): i[3579]-10xxGx patterns
+      #   - Tiger Lake (11th gen mobile): i[3579]-11xxGx patterns
+      #   - Rocket Lake (11th gen desktop): i[3579]-11xxx (non-G suffix)
+      #   - Xeon Scalable (various gens), Xeon W
+      # Note: Intel 12th+ gen (Alder Lake, Raptor Lake) had AVX-512 disabled via microcode
+      # AMD: Zen 4+ (Ryzen 7000/8000/9000 series, EPYC Genoa)
+
+      $hasAVX512 = $false
+
+      # Intel 10th gen mobile (Ice Lake) - pattern: i7-1065G7, i5-1035G1, etc.
+      if ($procName -match 'i[3579]-10[0-9]{2}g') { $hasAVX512 = $true }
+
+      # Intel 11th gen (Tiger Lake mobile + Rocket Lake desktop)
+      if ($procName -match 'i[3579]-11[0-9]{2,3}') { $hasAVX512 = $true }
+
+      # Intel Xeon W series (various generations with AVX-512)
+      if ($procName -match 'xeon.*w-[0-9]{4,5}') { $hasAVX512 = $true }
+
+      # Intel Xeon Scalable (Gold, Platinum, Silver, Bronze)
+      if ($procName -match 'xeon.*(gold|platinum|silver|bronze)') { $hasAVX512 = $true }
+
+      # Intel Xeon with 4-5 digit model numbers (Scalable, etc.)
+      if ($procName -match 'xeon.*[0-9]{4,5}' -and $procName -notmatch 'e[357]-') { $hasAVX512 = $true }
+
+      # AMD Ryzen 7000 series (Zen 4) - pattern: Ryzen 5 7600, Ryzen 9 7950X, etc.
+      if ($procName -match 'ryzen.*[3579].*7[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD Ryzen 8000 series (Zen 4 APUs, e.g., 8700G)
+      if ($procName -match 'ryzen.*[3579].*8[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD Ryzen 9000 series (Zen 5)
+      if ($procName -match 'ryzen.*[3579].*9[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD Ryzen AI 300 series (Strix Point, Zen 5)
+      if ($procName -match 'ryzen.*ai.*3[0-9]{2}') { $hasAVX512 = $true }
+
+      # AMD EPYC 9000 series (Genoa, Zen 4)
+      if ($procName -match 'epyc.*9[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD EPYC 8000 series (Siena, Zen 4c)
+      if ($procName -match 'epyc.*8[0-9]{3}') { $hasAVX512 = $true }
+
+      Write-Output "MODEL:$($cpu.Name)"
+      Write-Output "AVX512:$hasAVX512"
+      `
+    ], { timeout: 1e4 });
+    const modelMatch = psOutput.match(/MODEL:(.+)/i);
+    if (modelMatch && !capabilities.cpuModel) {
+      capabilities.cpuModel = modelMatch[1].trim();
+    }
+    if (psOutput.toLowerCase().includes("avx512:true")) {
+      capabilities.avx512 = true;
+    }
+  } catch {
+    console.warn("PowerShell CPU detection failed, using baseline assumptions");
+  }
+  capabilities.sse = true;
+  capabilities.sse2 = true;
+  capabilities.sse3 = true;
+  capabilities.ssse3 = true;
+  capabilities.sse41 = true;
+  capabilities.sse42 = true;
+  capabilities.avx = true;
+  capabilities.avx2 = true;
+}
+async function detectLinuxCPUCapabilities(capabilities) {
+  const { stdout } = await execFileAsync("cat", ["/proc/cpuinfo"], {
+    timeout: 5e3
+  });
+  const modelMatch = stdout.match(/model name\s*:\s*(.+)/i);
+  capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null;
+  const flagsMatch = stdout.match(/^flags\s*:\s*(.+)$/im);
+  if (flagsMatch) {
+    const flags = ` ${flagsMatch[1].toLowerCase()} `;
+    capabilities.sse = / sse /.test(flags);
+    capabilities.sse2 = / sse2 /.test(flags);
+    capabilities.sse3 = / sse3 /.test(flags) || / pni /.test(flags);
+    capabilities.ssse3 = / ssse3 /.test(flags);
+    capabilities.sse41 = / sse4_1 /.test(flags);
+    capabilities.sse42 = / sse4_2 /.test(flags);
+    capabilities.avx = / avx /.test(flags);
+    capabilities.avx2 = / avx2 /.test(flags);
+    capabilities.avx512 = /avx512/.test(flags);
+  }
+}
+async function detectMacOSCPUCapabilities(capabilities) {
+  try {
+    const { stdout: archOutput } = await execFileAsync("uname", ["-m"], { timeout: 2e3 });
+    const isAppleSilicon = archOutput.trim().toLowerCase() === "arm64";
+    if (isAppleSilicon) {
+      try {
+        const { stdout: brandOutput } = await execFileAsync(
+          "sysctl",
+          ["-n", "machdep.cpu.brand_string"],
+          { timeout: 2e3 }
+        );
+        capabilities.cpuModel = brandOutput.trim() || "Apple Silicon";
+      } catch {
+        capabilities.cpuModel = "Apple Silicon";
+      }
+      return;
+    }
+  } catch {
+  }
+  try {
+    const { stdout: brandOutput } = await execFileAsync(
+      "sysctl",
+      ["-n", "machdep.cpu.brand_string"],
+      { timeout: 2e3 }
+    );
+    capabilities.cpuModel = brandOutput.trim();
+  } catch {
+  }
+  try {
+    const { stdout: featuresOutput } = await execFileAsync(
+      "sysctl",
+      ["-n", "machdep.cpu.features"],
+      { timeout: 2e3 }
+    );
+    const features = ` ${featuresOutput.toLowerCase()} `;
+    capabilities.sse = features.includes("sse");
+    capabilities.sse2 = features.includes("sse2");
+    capabilities.sse3 = features.includes("sse3");
+    capabilities.ssse3 = features.includes("ssse3") || features.includes("supplementalsse3");
+    capabilities.sse41 = features.includes("sse4.1");
+    capabilities.sse42 = features.includes("sse4.2");
+    capabilities.avx = features.includes("avx1.0") || / avx /.test(features);
+  } catch {
+  }
+  try {
+    const { stdout: leaf7Output } = await execFileAsync(
+      "sysctl",
+      ["-n", "machdep.cpu.leaf7_features"],
+      { timeout: 2e3 }
+    );
+    const leaf7 = leaf7Output.toLowerCase();
+    capabilities.avx2 = leaf7.includes("avx2");
+    capabilities.avx512 = leaf7.includes("avx512");
+  } catch {
+  }
 }
 function buildFFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   const args = [];
@@ -3409,7 +3599,8 @@ function registerProcessingHandlers(deps = {}) {
         recommended: result.recommended,
         platform: result.platform,
         gpuVendor: result.gpuVendor,
-        gpuModel: result.gpuModel
+        gpuModel: result.gpuModel,
+        cpuCapabilities: result.cpuCapabilities
       };
     } catch (error2) {
       return {
@@ -5387,6 +5578,7 @@ const DEFAULT_ARCHIVAL_CONFIG = {
   // Best for AV1 + various audio formats
   preserveStructure: false,
   overwriteExisting: false,
+  fillMode: false,
   deleteOriginal: false,
   // Safety: never auto-delete originals
   deleteOutputIfLarger: true,
@@ -5395,7 +5587,7 @@ const DEFAULT_ARCHIVAL_CONFIG = {
   // Disabled by default
   extractCaptions: false,
   // Disabled by default - uses Whisper for transcription
-  limitedResourceMode: false
+  threadLimit: 0
   // Use all available threads by default
 };
 ({
@@ -5525,8 +5717,8 @@ function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogF
   const effectiveCrf = options.crf !== 30 ? options.crf : getOptimalCrf(sourceInfo);
   const pass1 = [];
   pass1.push("-i", inputPath);
-  if (config.limitedResourceMode) {
-    pass1.push("-threads", "6");
+  if (config.threadLimit > 0) {
+    pass1.push("-threads", String(config.threadLimit));
   }
   pass1.push("-c:v", encoder);
   pass1.push("-crf", effectiveCrf.toString());
@@ -5547,8 +5739,8 @@ function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogF
   pass1.push(process.platform === "win32" ? "NUL" : "/dev/null");
   const pass2 = [];
   pass2.push("-i", inputPath);
-  if (config.limitedResourceMode) {
-    pass2.push("-threads", "6");
+  if (config.threadLimit > 0) {
+    pass2.push("-threads", String(config.threadLimit));
   }
   pass2.push("-c:v", encoder);
   pass2.push("-crf", effectiveCrf.toString());
@@ -5586,8 +5778,8 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   const options = config.h265;
   const pass1 = [];
   pass1.push("-i", inputPath);
-  if (config.limitedResourceMode) {
-    pass1.push("-threads", "6");
+  if (config.threadLimit > 0) {
+    pass1.push("-threads", String(config.threadLimit));
   }
   pass1.push("-c:v", options.encoder);
   pass1.push("-crf", options.crf.toString());
@@ -5610,8 +5802,8 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   pass1.push(process.platform === "win32" ? "NUL" : "/dev/null");
   const pass2 = [];
   pass2.push("-i", inputPath);
-  if (config.limitedResourceMode) {
-    pass2.push("-threads", "6");
+  if (config.threadLimit > 0) {
+    pass2.push("-threads", String(config.threadLimit));
   }
   pass2.push("-c:v", options.encoder);
   pass2.push("-crf", options.crf.toString());
@@ -5692,8 +5884,8 @@ function estimateVbvMaxrate(width, height, frameRate) {
 function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   const args = [];
   args.push("-i", inputPath);
-  if (config.limitedResourceMode) {
-    args.push("-threads", "6");
+  if (config.threadLimit > 0) {
+    args.push("-threads", String(config.threadLimit));
   }
   const encoder = config.av1.encoder;
   args.push("-c:v", encoder);
@@ -5736,8 +5928,8 @@ function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
 function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   const args = [];
   args.push("-i", inputPath);
-  if (config.limitedResourceMode) {
-    args.push("-threads", "6");
+  if (config.threadLimit > 0) {
+    args.push("-threads", String(config.threadLimit));
   }
   args.push("-c:v", config.h265.encoder);
   args.push("-crf", config.h265.crf.toString());
@@ -6283,6 +6475,7 @@ class ArchivalService {
     this.activeJob = null;
     this.activeProcess = null;
     this.abortController = null;
+    this.fillModeSeenOutputs = null;
     this.encodingStartTime = 0;
     this.speedSamples = [];
     this.maxSpeedSamples = 10;
@@ -6455,6 +6648,10 @@ class ArchivalService {
       ...configOverrides,
       outputDir
     };
+    if (config.fillMode) {
+      config.overwriteExisting = false;
+    }
+    this.fillModeSeenOutputs = config.fillMode ? /* @__PURE__ */ new Set() : null;
     const bestEncoder = await getBestEncoder(config.av1.encoder);
     if (!bestEncoder) {
       throw new Error(
@@ -6478,7 +6675,9 @@ class ArchivalService {
       status: "queued",
       progress: 0
     }));
-    this.deduplicateOutputPaths(items);
+    if (!config.fillMode) {
+      this.deduplicateOutputPaths(items);
+    }
     this.activeJob = {
       id: batchId,
       items,
@@ -6624,6 +6823,7 @@ class ArchivalService {
       totalItems: this.activeJob.totalItems
     });
     this.abortController = null;
+    this.fillModeSeenOutputs = null;
   }
   /**
    * Process a single item in the batch
@@ -6639,6 +6839,16 @@ class ArchivalService {
       status: "analyzing"
     });
     try {
+      if (this.activeJob.config.fillMode) {
+        const shouldSkip = await this.shouldSkipForFillMode(item.outputPath);
+        if (shouldSkip) {
+          this.logger.info("Skipping due to name conflict (fill mode)", {
+            outputPath: item.outputPath
+          });
+          this.markItemSkipped(item);
+          return;
+        }
+      }
       await access(item.inputPath);
       const inputStat = await stat$5(item.inputPath);
       item.inputSize = inputStat.size;
@@ -6649,8 +6859,7 @@ class ArchivalService {
         try {
           await access(item.outputPath);
           this.logger.info("Skipping existing output", { outputPath: item.outputPath });
-          item.status = "skipped";
-          this.activeJob.skippedItems++;
+          this.markItemSkipped(item);
           return;
         } catch {
         }
@@ -7241,6 +7450,48 @@ class ArchivalService {
         this.abortController.signal.addEventListener("abort", abortHandler, { once: true });
       }
     });
+  }
+  /**
+   * Determine whether an item should be skipped in fill mode.
+   * Fill mode avoids output name conflicts by skipping items that would collide.
+   */
+  async shouldSkipForFillMode(outputPath) {
+    if (!this.activeJob?.config.fillMode) return false;
+    if (!this.fillModeSeenOutputs) {
+      this.fillModeSeenOutputs = /* @__PURE__ */ new Set();
+    }
+    const normalizedOutput = this.normalizeOutputPath(outputPath);
+    if (this.fillModeSeenOutputs.has(normalizedOutput)) {
+      return true;
+    }
+    try {
+      await access(outputPath);
+      this.fillModeSeenOutputs.add(normalizedOutput);
+      return true;
+    } catch {
+    }
+    this.fillModeSeenOutputs.add(normalizedOutput);
+    return false;
+  }
+  /**
+   * Mark an item as skipped and emit a completion event.
+   */
+  markItemSkipped(item) {
+    if (!this.activeJob) return;
+    item.status = "skipped";
+    item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.activeJob.skippedItems++;
+    this.emitEvent({
+      batchId: this.activeJob.id,
+      itemId: item.id,
+      kind: "item_complete",
+      progress: 100,
+      status: "skipped"
+    });
+  }
+  normalizeOutputPath(filePath) {
+    const normalized = filePath.replace(/\\/g, "/");
+    return platform$1() === "win32" ? normalized.toLowerCase() : normalized;
   }
   /**
    * Clean up partial output file on error/cancel

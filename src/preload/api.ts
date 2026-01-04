@@ -535,6 +535,19 @@ export type ProcessingCancelResponse = {
   error?: string
 }
 
+export type CPUSIMDCapabilities = {
+  sse: boolean
+  sse2: boolean
+  sse3: boolean
+  ssse3: boolean
+  sse41: boolean
+  sse42: boolean
+  avx: boolean
+  avx2: boolean
+  avx512: boolean
+  cpuModel: string | null
+}
+
 export type HWAccelDetectResponse = {
   ok: boolean
   available?: HWAccelerator[]
@@ -542,6 +555,7 @@ export type HWAccelDetectResponse = {
   platform?: 'darwin' | 'win32' | 'linux'
   gpuVendor?: string | null
   gpuModel?: string | null
+  cpuCapabilities?: CPUSIMDCapabilities | null
   error?: string
 }
 

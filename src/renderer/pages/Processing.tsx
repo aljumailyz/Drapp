@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import type { ProcessingPreset } from '../../preload/api'
+import type { ProcessingPreset, CPUSIMDCapabilities } from '../../preload/api'
 import VideoEncodingSettings from '../components/processing/VideoEncodingSettings'
 import { DEFAULT_ENCODING_CONFIG } from '../../shared/types/encoding.types'
 import type { VideoEncodingConfig, HWAccelerator } from '../../shared/types/encoding.types'
@@ -56,6 +56,7 @@ export default function Processing(): JSX.Element {
   const [advancedInput, setAdvancedInput] = useState<string | null>(null)
   const [advancedConfig, setAdvancedConfig] = useState<VideoEncodingConfig>(DEFAULT_ENCODING_CONFIG)
   const [availableHWAccel, setAvailableHWAccel] = useState<HWAccelerator[]>(['none'])
+  const [cpuCapabilities, setCpuCapabilities] = useState<CPUSIMDCapabilities | null>(null)
   const [isAdvancedSubmitting, setIsAdvancedSubmitting] = useState(false)
   const [advancedError, setAdvancedError] = useState<string | null>(null)
   const [showAdvancedPanel, setShowAdvancedPanel] = useState(false)
@@ -247,6 +248,10 @@ export default function Processing(): JSX.Element {
           // Auto-select recommended accelerator
           if (result.recommended && result.recommended !== 'none') {
             setAdvancedConfig(prev => ({ ...prev, hwAccel: result.recommended! }))
+          }
+          // Store CPU capabilities for UI display
+          if (result.cpuCapabilities) {
+            setCpuCapabilities(result.cpuCapabilities)
           }
         }
       })
@@ -1086,6 +1091,7 @@ export default function Processing(): JSX.Element {
               onChange={handleConfigChange}
               sourceInfo={sourceInfo}
               availableHWAccel={availableHWAccel}
+              cpuCapabilities={cpuCapabilities}
             />
 
             {/* FFmpeg Command Preview */}

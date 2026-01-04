@@ -8446,6 +8446,13 @@ function Archive() {
   const handleConfigChange = reactExports.useCallback((key, value) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
   }, []);
+  const handleFillModeChange = reactExports.useCallback((enabled) => {
+    setConfig((prev) => ({
+      ...prev,
+      fillMode: enabled,
+      ...enabled ? { overwriteExisting: false } : {}
+    }));
+  }, []);
   const handleAv1Change = reactExports.useCallback((key, value) => {
     setConfig((prev) => ({
       ...prev,
@@ -9014,10 +9021,27 @@ function Archive() {
                   type: "checkbox",
                   checked: config.overwriteExisting ?? false,
                   onChange: (e) => handleConfigChange("overwriteExisting", e.target.checked),
+                  disabled: config.fillMode ?? false,
+                  className: "h-4 w-4 rounded border-slate-300 disabled:opacity-50"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `text-sm ${config.fillMode ? "text-slate-400" : "text-slate-600"}`, children: "Overwrite existing files" })
+            ] }),
+            config.fillMode && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "ml-7 text-xs text-slate-400", children: "Fill mode disables overwrite to avoid accidental replacements." }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: config.fillMode ?? false,
+                  onChange: (e) => handleFillModeChange(e.target.checked),
                   className: "h-4 w-4 rounded border-slate-300"
                 }
               ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm text-slate-600", children: "Overwrite existing files" })
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-sm text-slate-600", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Fill mode" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Skip files that would conflict with existing output names (disables overwrite)" })
+              ] })
             ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -9159,20 +9183,22 @@ function Archive() {
               ),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm", children: "Delete original after encoding" })
             ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-3", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "input",
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: "Thread limit" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "select",
                 {
-                  type: "checkbox",
-                  checked: config.limitedResourceMode ?? false,
-                  onChange: (e) => handleConfigChange("limitedResourceMode", e.target.checked),
-                  className: "h-4 w-4 rounded border-slate-300"
+                  value: String(config.threadLimit ?? 0),
+                  onChange: (e) => handleConfigChange("threadLimit", Number(e.target.value)),
+                  className: "mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm",
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "0", children: "No limit (use all threads)" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "6", children: "Limit to 6 threads" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "4", children: "Limit to 4 threads" })
+                  ]
                 }
               ),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-sm text-slate-600", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Limited resource mode" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Use only 6 threads for lower CPU usage" })
-              ] })
+              /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-slate-400", children: "Lower CPU usage at the cost of slower encoding." })
             ] })
           ] })
         ] })
@@ -9249,7 +9275,7 @@ function Archive() {
             " already exist"
           ] }),
           " ",
-          'and will be skipped. Enable "Overwrite existing files" to re-encode them.'
+          config.fillMode ? "and will be skipped because Fill mode is enabled." : 'and will be skipped. Enable "Overwrite existing files" to re-encode them.'
         ] })
       ] })
     ] }),
@@ -13210,7 +13236,8 @@ function VideoEncodingSettings({
   config,
   onChange,
   sourceInfo,
-  availableHWAccel = ["none", "videotoolbox"]
+  availableHWAccel = ["none", "videotoolbox"],
+  cpuCapabilities
 }) {
   const [activeTab, setActiveTab] = reactExports.useState("presets");
   const [uiMode, setUIMode] = reactExports.useState("simple");
@@ -13367,6 +13394,7 @@ function VideoEncodingSettings({
           sourceInfo,
           availableProfiles,
           availableHWAccel,
+          cpuCapabilities,
           crfInfo,
           uiMode
         }
@@ -13508,6 +13536,7 @@ function VideoTab({
   sourceInfo,
   availableProfiles,
   availableHWAccel,
+  cpuCapabilities,
   crfInfo,
   uiMode
 }) {
@@ -13710,7 +13739,7 @@ function VideoTab({
         }) })
       }
     ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
       SettingGroup,
       {
         label: "Hardware Acceleration",
@@ -13718,30 +13747,86 @@ function VideoTab({
           /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: "Hardware Acceleration" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: "Use GPU hardware to speed up encoding. Much faster but may produce slightly lower quality than software encoding." })
         ] }),
-        children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "grid grid-cols-3 gap-2", children: HW_ACCELERATORS.filter((hw) => availableHWAccel.includes(hw.id)).map((hw) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-          Tooltip,
-          {
-            content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: hw.label }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: hw.description }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-amber-400", children: hw.qualityNote })
-            ] }),
-            position: "bottom",
-            children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
-              "button",
-              {
-                type: "button",
-                onClick: () => updateConfig("hwAccel", hw.id),
-                className: `w-full rounded-lg border px-3 py-2 text-sm transition ${config.hwAccel === hw.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 text-slate-700 hover:border-slate-300"}`,
-                children: [
-                  hw.label,
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `block text-xs ${config.hwAccel === hw.id ? "text-slate-300" : "text-slate-400"}`, children: hw.vendor })
-                ]
-              }
-            )
-          },
-          hw.id
-        )) })
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "grid grid-cols-3 gap-2", children: HW_ACCELERATORS.filter((hw) => availableHWAccel.includes(hw.id)).map((hw) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Tooltip,
+            {
+              content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: hw.label }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: hw.description }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-amber-400", children: hw.qualityNote })
+              ] }),
+              position: "bottom",
+              children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  type: "button",
+                  onClick: () => updateConfig("hwAccel", hw.id),
+                  className: `w-full rounded-lg border px-3 py-2 text-sm transition ${config.hwAccel === hw.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 text-slate-700 hover:border-slate-300"}`,
+                  children: [
+                    hw.label,
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `block text-xs ${config.hwAccel === hw.id ? "text-slate-300" : "text-slate-400"}`, children: hw.vendor })
+                  ]
+                }
+              )
+            },
+            hw.id
+          )) }),
+          config.hwAccel === "none" && cpuCapabilities && (() => {
+            const isAppleSilicon = cpuCapabilities.cpuModel?.toLowerCase().includes("apple");
+            const hasAnyOptimization = cpuCapabilities.avx512 || cpuCapabilities.avx2 || cpuCapabilities.avx || isAppleSilicon;
+            if (!hasAnyOptimization) return null;
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-3 flex flex-wrap items-center gap-2", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs text-slate-500", children: "CPU optimizations:" }),
+              cpuCapabilities.avx512 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                Tooltip,
+                {
+                  content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: "AVX-512 Active" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: "Your CPU supports AVX-512 instructions, enabling faster software encoding with x265, SVT-AV1, and other encoders." }),
+                    cpuCapabilities.cpuModel && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-slate-400", children: cpuCapabilities.cpuModel })
+                  ] }),
+                  position: "bottom",
+                  children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { className: "h-3 w-3", fill: "currentColor", viewBox: "0 0 20 20", children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { fillRule: "evenodd", d: "M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z", clipRule: "evenodd" }) }),
+                    "AVX-512"
+                  ] })
+                }
+              ),
+              cpuCapabilities.avx2 && !cpuCapabilities.avx512 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                Tooltip,
+                {
+                  content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: "AVX2 Active" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: "Your CPU supports AVX2 instructions for optimized software encoding." }),
+                    cpuCapabilities.cpuModel && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-slate-400", children: cpuCapabilities.cpuModel })
+                  ] }),
+                  position: "bottom",
+                  children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { className: "h-3 w-3", fill: "currentColor", viewBox: "0 0 20 20", children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { fillRule: "evenodd", d: "M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z", clipRule: "evenodd" }) }),
+                    "AVX2"
+                  ] })
+                }
+              ),
+              cpuCapabilities.avx && !cpuCapabilities.avx2 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600", children: "AVX" }),
+              isAppleSilicon && !cpuCapabilities.avx && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                Tooltip,
+                {
+                  content: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipHeading, { children: "ARM NEON Active" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(TooltipText, { children: "Apple Silicon uses ARM NEON SIMD for optimized software encoding." }),
+                    cpuCapabilities.cpuModel && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-xs text-slate-400", children: cpuCapabilities.cpuModel })
+                  ] }),
+                  position: "bottom",
+                  children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { className: "h-3 w-3", fill: "currentColor", viewBox: "0 0 20 20", children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { fillRule: "evenodd", d: "M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z", clipRule: "evenodd" }) }),
+                    "ARM NEON"
+                  ] })
+                }
+              )
+            ] });
+          })()
+        ]
       }
     ),
     uiMode === "advanced" && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -14440,6 +14525,7 @@ function Processing() {
   const [advancedInput, setAdvancedInput] = reactExports.useState(null);
   const [advancedConfig, setAdvancedConfig] = reactExports.useState(DEFAULT_ENCODING_CONFIG);
   const [availableHWAccel, setAvailableHWAccel] = reactExports.useState(["none"]);
+  const [cpuCapabilities, setCpuCapabilities] = reactExports.useState(null);
   const [isAdvancedSubmitting, setIsAdvancedSubmitting] = reactExports.useState(false);
   const [advancedError, setAdvancedError] = reactExports.useState(null);
   const [showAdvancedPanel, setShowAdvancedPanel] = reactExports.useState(false);
@@ -14600,6 +14686,9 @@ function Processing() {
         setAvailableHWAccel(result.available);
         if (result.recommended && result.recommended !== "none") {
           setAdvancedConfig((prev) => ({ ...prev, hwAccel: result.recommended }));
+        }
+        if (result.cpuCapabilities) {
+          setCpuCapabilities(result.cpuCapabilities);
         }
       }
     }).catch(() => {
@@ -15338,7 +15427,8 @@ function Processing() {
             config: advancedConfig,
             onChange: handleConfigChange,
             sourceInfo,
-            availableHWAccel
+            availableHWAccel,
+            cpuCapabilities
           }
         ),
         ffmpegPreview && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-6 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3", children: [

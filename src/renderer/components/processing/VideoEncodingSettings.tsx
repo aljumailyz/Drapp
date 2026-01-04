@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import Tooltip, { InfoTooltip, TooltipHeading, TooltipText, TooltipList } from '../ui/Tooltip'
+import type { CPUSIMDCapabilities } from '../../../preload/api'
 import type {
   VideoEncodingConfig,
   ResolutionPreset,
@@ -42,6 +43,7 @@ type VideoEncodingSettingsProps = {
     bitrate: number
   }
   availableHWAccel?: HWAccelerator[]
+  cpuCapabilities?: CPUSIMDCapabilities | null
 }
 
 type TabId = 'presets' | 'video' | 'audio' | 'filters' | 'output'
@@ -306,7 +308,8 @@ export default function VideoEncodingSettings({
   config,
   onChange,
   sourceInfo,
-  availableHWAccel = ['none', 'videotoolbox']
+  availableHWAccel = ['none', 'videotoolbox'],
+  cpuCapabilities
 }: VideoEncodingSettingsProps): JSX.Element {
   const [activeTab, setActiveTab] = useState<TabId>('presets')
   const [uiMode, setUIMode] = useState<UIMode>('simple')
@@ -512,6 +515,7 @@ export default function VideoEncodingSettings({
             sourceInfo={sourceInfo}
             availableProfiles={availableProfiles}
             availableHWAccel={availableHWAccel}
+            cpuCapabilities={cpuCapabilities}
             crfInfo={crfInfo}
             uiMode={uiMode}
           />
@@ -712,6 +716,7 @@ function VideoTab({
   sourceInfo,
   availableProfiles,
   availableHWAccel,
+  cpuCapabilities,
   crfInfo,
   uiMode
 }: {
@@ -720,6 +725,7 @@ function VideoTab({
   sourceInfo?: { width: number; height: number; duration: number; codec: string; frameRate: number; bitrate: number }
   availableProfiles: typeof H264_PROFILES
   availableHWAccel: HWAccelerator[]
+  cpuCapabilities?: CPUSIMDCapabilities | null
   crfInfo: typeof CRF_GUIDE[number]
   uiMode: UIMode
 }): JSX.Element {
@@ -988,6 +994,97 @@ function VideoTab({
             </Tooltip>
           ))}
         </div>
+
+        {/* CPU SIMD Capabilities Indicator */}
+        {config.hwAccel === 'none' && cpuCapabilities && (
+          (() => {
+            // Determine which badge to show
+            const isAppleSilicon = cpuCapabilities.cpuModel?.toLowerCase().includes('apple')
+            const hasAnyOptimization = cpuCapabilities.avx512 || cpuCapabilities.avx2 || cpuCapabilities.avx || isAppleSilicon
+
+            if (!hasAnyOptimization) return null
+
+            return (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-500">CPU optimizations:</span>
+                {cpuCapabilities.avx512 && (
+                  <Tooltip
+                    content={
+                      <>
+                        <TooltipHeading>AVX-512 Active</TooltipHeading>
+                        <TooltipText>
+                          Your CPU supports AVX-512 instructions, enabling faster software encoding with x265, SVT-AV1, and other encoders.
+                        </TooltipText>
+                        {cpuCapabilities.cpuModel && (
+                          <p className="mt-1 text-xs text-slate-400">{cpuCapabilities.cpuModel}</p>
+                        )}
+                      </>
+                    }
+                    position="bottom"
+                  >
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                      <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      AVX-512
+                    </span>
+                  </Tooltip>
+                )}
+                {cpuCapabilities.avx2 && !cpuCapabilities.avx512 && (
+                  <Tooltip
+                    content={
+                      <>
+                        <TooltipHeading>AVX2 Active</TooltipHeading>
+                        <TooltipText>
+                          Your CPU supports AVX2 instructions for optimized software encoding.
+                        </TooltipText>
+                        {cpuCapabilities.cpuModel && (
+                          <p className="mt-1 text-xs text-slate-400">{cpuCapabilities.cpuModel}</p>
+                        )}
+                      </>
+                    }
+                    position="bottom"
+                  >
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                      <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      AVX2
+                    </span>
+                  </Tooltip>
+                )}
+                {cpuCapabilities.avx && !cpuCapabilities.avx2 && (
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    AVX
+                  </span>
+                )}
+                {isAppleSilicon && !cpuCapabilities.avx && (
+                  <Tooltip
+                    content={
+                      <>
+                        <TooltipHeading>ARM NEON Active</TooltipHeading>
+                        <TooltipText>
+                          Apple Silicon uses ARM NEON SIMD for optimized software encoding.
+                        </TooltipText>
+                        {cpuCapabilities.cpuModel && (
+                          <p className="mt-1 text-xs text-slate-400">{cpuCapabilities.cpuModel}</p>
+                        )}
+                      </>
+                    }
+                    position="bottom"
+                  >
+                    <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
+                      <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      ARM NEON
+                    </span>
+                  </Tooltip>
+                )}
+              </div>
+            )
+          })()
+        )}
       </SettingGroup>
 
       {/* Advanced Settings (only in advanced mode or when toggled) */}

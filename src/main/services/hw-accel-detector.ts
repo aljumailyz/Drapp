@@ -5,12 +5,26 @@ import type { HWAccelerator } from '../../shared/types/encoding.types'
 
 const execFileAsync = promisify(execFile)
 
+export type CPUSIMDCapabilities = {
+  sse: boolean
+  sse2: boolean
+  sse3: boolean
+  ssse3: boolean
+  sse41: boolean
+  sse42: boolean
+  avx: boolean
+  avx2: boolean
+  avx512: boolean
+  cpuModel: string | null
+}
+
 export type HWAccelInfo = {
   available: HWAccelerator[]
   recommended: HWAccelerator
   platform: 'darwin' | 'win32' | 'linux'
   gpuVendor: string | null
   gpuModel: string | null
+  cpuCapabilities: CPUSIMDCapabilities | null
 }
 
 /**
@@ -71,12 +85,16 @@ export async function detectHWAccelerators(ffmpegPath: string): Promise<HWAccelI
   // Determine recommended accelerator
   const recommended = getRecommendedAccelerator(available, platform)
 
+  // Detect CPU SIMD capabilities
+  const cpuCapabilities = await detectCPUSIMDCapabilities()
+
   return {
     available,
     recommended,
     platform,
     gpuVendor,
-    gpuModel
+    gpuModel,
+    cpuCapabilities
   }
 }
 
@@ -163,6 +181,271 @@ async function detectAMDGPU(): Promise<string | null> {
     // WMIC not available
   }
   return null
+}
+
+/**
+ * Detect CPU SIMD capabilities (SSE, AVX, AVX-512)
+ */
+export async function detectCPUSIMDCapabilities(): Promise<CPUSIMDCapabilities | null> {
+  const platform = os.platform()
+
+  const capabilities: CPUSIMDCapabilities = {
+    sse: false,
+    sse2: false,
+    sse3: false,
+    ssse3: false,
+    sse41: false,
+    sse42: false,
+    avx: false,
+    avx2: false,
+    avx512: false,
+    cpuModel: null
+  }
+
+  try {
+    if (platform === 'win32') {
+      await detectWindowsCPUCapabilities(capabilities)
+    } else if (platform === 'linux') {
+      await detectLinuxCPUCapabilities(capabilities)
+    } else if (platform === 'darwin') {
+      await detectMacOSCPUCapabilities(capabilities)
+    }
+  } catch (error) {
+    console.warn('CPU SIMD detection failed:', error)
+    return null
+  }
+
+  return capabilities
+}
+
+/**
+ * Detect CPU capabilities on Windows
+ */
+async function detectWindowsCPUCapabilities(capabilities: CPUSIMDCapabilities): Promise<void> {
+  // Get CPU name via WMIC
+  try {
+    const { stdout: cpuName } = await execFileAsync('wmic', ['cpu', 'get', 'name'], {
+      timeout: 5000
+    })
+    const lines = cpuName.trim().split('\n').filter(l => l.trim() && !l.includes('Name'))
+    capabilities.cpuModel = lines[0]?.trim() || null
+  } catch {
+    // Ignore - will try PowerShell fallback
+  }
+
+  // Use PowerShell for more detailed detection
+  try {
+    const { stdout: psOutput } = await execFileAsync('powershell', [
+      '-NoProfile',
+      '-Command',
+      `
+      $cpu = Get-CimInstance -ClassName Win32_Processor
+      $procName = $cpu.Name.ToLower()
+
+      # Conservative heuristics for AVX-512 capable CPUs
+      # Intel: Only specific generations have AVX-512 enabled
+      #   - Ice Lake (10th gen mobile): i[3579]-10xxGx patterns
+      #   - Tiger Lake (11th gen mobile): i[3579]-11xxGx patterns
+      #   - Rocket Lake (11th gen desktop): i[3579]-11xxx (non-G suffix)
+      #   - Xeon Scalable (various gens), Xeon W
+      # Note: Intel 12th+ gen (Alder Lake, Raptor Lake) had AVX-512 disabled via microcode
+      # AMD: Zen 4+ (Ryzen 7000/8000/9000 series, EPYC Genoa)
+
+      $hasAVX512 = $false
+
+      # Intel 10th gen mobile (Ice Lake) - pattern: i7-1065G7, i5-1035G1, etc.
+      if ($procName -match 'i[3579]-10[0-9]{2}g') { $hasAVX512 = $true }
+
+      # Intel 11th gen (Tiger Lake mobile + Rocket Lake desktop)
+      if ($procName -match 'i[3579]-11[0-9]{2,3}') { $hasAVX512 = $true }
+
+      # Intel Xeon W series (various generations with AVX-512)
+      if ($procName -match 'xeon.*w-[0-9]{4,5}') { $hasAVX512 = $true }
+
+      # Intel Xeon Scalable (Gold, Platinum, Silver, Bronze)
+      if ($procName -match 'xeon.*(gold|platinum|silver|bronze)') { $hasAVX512 = $true }
+
+      # Intel Xeon with 4-5 digit model numbers (Scalable, etc.)
+      if ($procName -match 'xeon.*[0-9]{4,5}' -and $procName -notmatch 'e[357]-') { $hasAVX512 = $true }
+
+      # AMD Ryzen 7000 series (Zen 4) - pattern: Ryzen 5 7600, Ryzen 9 7950X, etc.
+      if ($procName -match 'ryzen.*[3579].*7[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD Ryzen 8000 series (Zen 4 APUs, e.g., 8700G)
+      if ($procName -match 'ryzen.*[3579].*8[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD Ryzen 9000 series (Zen 5)
+      if ($procName -match 'ryzen.*[3579].*9[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD Ryzen AI 300 series (Strix Point, Zen 5)
+      if ($procName -match 'ryzen.*ai.*3[0-9]{2}') { $hasAVX512 = $true }
+
+      # AMD EPYC 9000 series (Genoa, Zen 4)
+      if ($procName -match 'epyc.*9[0-9]{3}') { $hasAVX512 = $true }
+
+      # AMD EPYC 8000 series (Siena, Zen 4c)
+      if ($procName -match 'epyc.*8[0-9]{3}') { $hasAVX512 = $true }
+
+      Write-Output "MODEL:$($cpu.Name)"
+      Write-Output "AVX512:$hasAVX512"
+      `
+    ], { timeout: 10000 })
+
+    // Parse output
+    const modelMatch = psOutput.match(/MODEL:(.+)/i)
+    if (modelMatch && !capabilities.cpuModel) {
+      capabilities.cpuModel = modelMatch[1].trim()
+    }
+
+    if (psOutput.toLowerCase().includes('avx512:true')) {
+      capabilities.avx512 = true
+    }
+  } catch {
+    // PowerShell detection failed - continue with baseline assumptions
+    console.warn('PowerShell CPU detection failed, using baseline assumptions')
+  }
+
+  // Modern x86-64 CPUs (2013+) have at least AVX2
+  // Set baseline capabilities for any modern CPU
+  capabilities.sse = true
+  capabilities.sse2 = true
+  capabilities.sse3 = true
+  capabilities.ssse3 = true
+  capabilities.sse41 = true
+  capabilities.sse42 = true
+  capabilities.avx = true
+  capabilities.avx2 = true
+}
+
+/**
+ * Detect CPU capabilities on Linux by reading /proc/cpuinfo
+ */
+async function detectLinuxCPUCapabilities(capabilities: CPUSIMDCapabilities): Promise<void> {
+  const { stdout } = await execFileAsync('cat', ['/proc/cpuinfo'], {
+    timeout: 5000
+  })
+
+  // Extract CPU model
+  const modelMatch = stdout.match(/model name\s*:\s*(.+)/i)
+  capabilities.cpuModel = modelMatch ? modelMatch[1].trim() : null
+
+  // Extract flags line - more reliable than searching whole output
+  const flagsMatch = stdout.match(/^flags\s*:\s*(.+)$/im)
+  if (flagsMatch) {
+    const flags = ` ${flagsMatch[1].toLowerCase()} ` // Pad with spaces for word boundary matching
+
+    // Check for SIMD flags using word boundaries
+    capabilities.sse = / sse /.test(flags)
+    capabilities.sse2 = / sse2 /.test(flags)
+    capabilities.sse3 = / sse3 /.test(flags) || / pni /.test(flags)
+    capabilities.ssse3 = / ssse3 /.test(flags)
+    capabilities.sse41 = / sse4_1 /.test(flags)
+    capabilities.sse42 = / sse4_2 /.test(flags)
+    capabilities.avx = / avx /.test(flags)
+    capabilities.avx2 = / avx2 /.test(flags)
+
+    // AVX-512 has multiple feature flags - check for any of them
+    capabilities.avx512 = /avx512/.test(flags)
+  }
+}
+
+/**
+ * Detect CPU capabilities on macOS using sysctl
+ */
+async function detectMacOSCPUCapabilities(capabilities: CPUSIMDCapabilities): Promise<void> {
+  // First check if this is Apple Silicon
+  try {
+    const { stdout: archOutput } = await execFileAsync('uname', ['-m'], { timeout: 2000 })
+    const isAppleSilicon = archOutput.trim().toLowerCase() === 'arm64'
+
+    if (isAppleSilicon) {
+      // Apple Silicon - get CPU brand but no AVX support
+      try {
+        const { stdout: brandOutput } = await execFileAsync(
+          'sysctl',
+          ['-n', 'machdep.cpu.brand_string'],
+          { timeout: 2000 }
+        )
+        capabilities.cpuModel = brandOutput.trim() || 'Apple Silicon'
+      } catch {
+        capabilities.cpuModel = 'Apple Silicon'
+      }
+
+      // Apple Silicon uses NEON (ARM SIMD), not x86 SIMD extensions
+      // All x86 SIMD capabilities remain false
+      return
+    }
+  } catch {
+    // If uname fails, continue with Intel detection
+  }
+
+  // Intel Mac - use sysctl to get CPU features
+  try {
+    const { stdout: brandOutput } = await execFileAsync(
+      'sysctl',
+      ['-n', 'machdep.cpu.brand_string'],
+      { timeout: 2000 }
+    )
+    capabilities.cpuModel = brandOutput.trim()
+  } catch {
+    // Ignore - we'll try to get features anyway
+  }
+
+  // Get CPU features
+  try {
+    const { stdout: featuresOutput } = await execFileAsync(
+      'sysctl',
+      ['-n', 'machdep.cpu.features'],
+      { timeout: 2000 }
+    )
+    const features = ` ${featuresOutput.toLowerCase()} `
+
+    capabilities.sse = features.includes('sse')
+    capabilities.sse2 = features.includes('sse2')
+    capabilities.sse3 = features.includes('sse3')
+    capabilities.ssse3 = features.includes('ssse3') || features.includes('supplementalsse3')
+    capabilities.sse41 = features.includes('sse4.1')
+    capabilities.sse42 = features.includes('sse4.2')
+    capabilities.avx = features.includes('avx1.0') || / avx /.test(features)
+  } catch {
+    // No features available
+  }
+
+  // Get leaf7 features (AVX2, AVX-512)
+  try {
+    const { stdout: leaf7Output } = await execFileAsync(
+      'sysctl',
+      ['-n', 'machdep.cpu.leaf7_features'],
+      { timeout: 2000 }
+    )
+    const leaf7 = leaf7Output.toLowerCase()
+
+    capabilities.avx2 = leaf7.includes('avx2')
+    capabilities.avx512 = leaf7.includes('avx512')
+  } catch {
+    // leaf7 not available on older CPUs
+  }
+}
+
+/**
+ * Check if FFmpeg's x265 encoder supports AVX-512
+ */
+export async function checkX265AVX512Support(ffmpegPath: string): Promise<boolean> {
+  try {
+    const { stderr } = await execFileAsync(
+      ffmpegPath,
+      ['-hide_banner', '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1', '-c:v', 'libx265', '-f', 'null', '-'],
+      { timeout: 15000 }
+    )
+
+    // x265 logs detected CPU capabilities to stderr
+    const output = stderr.toLowerCase()
+    return output.includes('avx512') || output.includes('avx-512')
+  } catch (error) {
+    // Check if the error output contains the info we need
+    const errorOutput = (error as { stderr?: string })?.stderr?.toLowerCase() || ''
+    return errorOutput.includes('avx512') || errorOutput.includes('avx-512')
+  }
 }
 
 /**
