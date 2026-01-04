@@ -10,6 +10,38 @@ import { getOptimalCrf, getResolutionCategory } from '../../../shared/types/arch
 import type { CPUSIMDCapabilities } from '../hw-accel-detector'
 
 /**
+ * Determine the appropriate H.265 level based on resolution
+ * Uses actual pixel count (luma samples) rather than just width/height
+ *
+ * Level limits (MaxLumaSamples):
+ * - Level 4.0: 2,228,224 (~2048x1088)
+ * - Level 4.1: 2,228,224 (~2048x1088) - higher bitrate than 4.0
+ * - Level 5.0: 8,912,896 (~4096x2176)
+ * - Level 5.1: 8,912,896 (~4096x2176) - higher bitrate than 5.0
+ *
+ * @returns level-idc value (40, 41, 50, or 51)
+ */
+function getH265Level(width: number, height: number): number {
+  const lumaSamples = width * height
+
+  // Level 4.1 max: 2,228,224 samples
+  // Level 5.0/5.1 max: 8,912,896 samples
+  if (lumaSamples > 8_912_896) {
+    // Beyond 5.1 - use highest available
+    return 62 // Level 6.2 for 8K
+  } else if (lumaSamples > 2_228_224) {
+    // Exceeds Level 4.1, need Level 5.x
+    // Use 5.1 for higher bitrate headroom
+    return 51
+  } else if (lumaSamples > 983_040) {
+    // Exceeds 720p (1280x720), use Level 4.1
+    return 41
+  }
+  // Default for smaller resolutions
+  return 40
+}
+
+/**
  * Two-pass encoding arguments
  * Contains separate argument arrays for each pass
  */
@@ -369,11 +401,9 @@ function buildX265ParamsWithPass(
 
   params.push('aq-mode=3')
 
-  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
-    params.push('level-idc=51')
-  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
-    params.push('level-idc=41')
-  }
+  // Set appropriate level based on actual pixel count
+  const level = getH265Level(sourceInfo.width, sourceInfo.height)
+  params.push(`level-idc=${level}`)
 
   // Enable AVX-512 optimizations if available
   if (cpuCapabilities?.avx512) {
@@ -798,12 +828,9 @@ function buildX265Params(
   // Adaptive quantization for better perceptual quality
   params.push('aq-mode=3') // Auto-variance AQ
 
-  // Level for compatibility (5.1 supports up to 4K@60fps)
-  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
-    params.push('level-idc=51')
-  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
-    params.push('level-idc=41')
-  }
+  // Set appropriate level based on actual pixel count
+  const level = getH265Level(sourceInfo.width, sourceInfo.height)
+  params.push(`level-idc=${level}`)
 
   // Enable AVX-512 optimizations if available
   // x265 auto-detects, but we can force it for maximum performance
