@@ -21,7 +21,8 @@
       "Bash(dir /s /b resources*ffmpeg*)",
       "Bash(Select-Object -Last 60)",
       "Bash(Select-Object -Last 20)",
-      "Bash(Select-Object -Last 30)"
+      "Bash(Select-Object -Last 30)",
+      "Bash(ls -la \"e:\\\\Development\\\\Drapp\\\\src\\\\main\\\\services\\\\archival\"\" 2>&1 || ls -la \"e:/Development/Drapp/src/main/services/archival/ \")"
     ]
   }
 }

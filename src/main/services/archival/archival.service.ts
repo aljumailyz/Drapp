@@ -28,8 +28,11 @@ import {
   type ArchivalEncodingConfig,
   type ArchivalProgressEvent,
   type ArchivalErrorType,
-  type VideoSourceInfo
+  type VideoSourceInfo,
+  type PersistedArchivalState,
+  type ArchivalQueueState
 } from '../../../shared/types/archival.types'
+import { ArchivalStatePersistence } from './archival-state-persistence'
 import { detectCPUSIMDCapabilities, type CPUSIMDCapabilities } from '../hw-accel-detector'
 import { platform } from 'node:os'
 import { exec } from 'node:child_process'
@@ -53,10 +56,15 @@ export class ArchivalService {
   private readonly logger = new Logger('ArchivalService')
   private readonly metadata = new MetadataService()
   private readonly whisperService = new WhisperService()
+  private readonly persistence = new ArchivalStatePersistence()
   private activeJob: ArchivalBatchJob | null = null
   private activeProcess: ChildProcess | null = null
   private abortController: AbortController | null = null
   private fillModeSeenOutputs: Set<string> | null = null
+
+  // Pause/Resume state
+  private isPaused: boolean = false
+  private currentEncodingItemId: string | null = null
 
   // ETA tracking
   private encodingStartTime: number = 0
@@ -295,6 +303,9 @@ export class ArchivalService {
       throw new Error('Another archival job is already running')
     }
 
+    // Clear any old recovery state when starting a new batch
+    await this.persistence.clearState()
+
     // Validate inputs
     if (!inputPaths || inputPaths.length === 0) {
       throw new Error('No input files provided')
@@ -423,7 +434,279 @@ export class ArchivalService {
       this.activeProcess = null
     }
 
+    // Clear persisted state on cancel
+    void this.persistence.clearState()
+
     return true
+  }
+
+  /**
+   * Pause the active batch job immediately
+   * Kills the current FFmpeg process and saves state for later resume
+   */
+  async pause(): Promise<boolean> {
+    if (!this.activeJob || this.activeJob.status !== 'running') {
+      return false
+    }
+
+    this.logger.info('Pausing encoding job', { jobId: this.activeJob.id })
+
+    // Set paused flag
+    this.isPaused = true
+
+    // Kill active FFmpeg process immediately
+    if (this.activeProcess) {
+      if (platform() === 'win32') {
+        this.activeProcess.kill()
+      } else {
+        this.activeProcess.kill('SIGTERM')
+      }
+      this.activeProcess = null
+    }
+
+    // Clean up partial output for the interrupted item
+    if (this.currentEncodingItemId) {
+      const currentItem = this.activeJob.items.find(i => i.id === this.currentEncodingItemId)
+      if (currentItem && currentItem.status === 'encoding') {
+        // Clean up partial output
+        await this.cleanupPartialOutput(currentItem.outputPath)
+        // Reset item to queued so it will restart on resume
+        currentItem.status = 'queued'
+        currentItem.progress = 0
+        currentItem.startedAt = undefined
+        currentItem.encodingSpeed = undefined
+        currentItem.etaSeconds = undefined
+        currentItem.elapsedSeconds = undefined
+      }
+    }
+
+    // Save state for recovery
+    await this.saveCurrentState()
+
+    // Emit pause event
+    this.emitEvent({
+      batchId: this.activeJob.id,
+      itemId: '',
+      kind: 'queue_paused',
+      queueState: 'paused'
+    })
+
+    this.logger.info('Encoding job paused', { jobId: this.activeJob.id })
+    return true
+  }
+
+  /**
+   * Resume a paused batch job
+   */
+  async resume(): Promise<boolean> {
+    if (!this.activeJob || !this.isPaused) {
+      return false
+    }
+
+    this.logger.info('Resuming encoding job', { jobId: this.activeJob.id })
+
+    // Clear pause flag
+    this.isPaused = false
+
+    // Re-check disk space before resuming
+    const remainingInputPaths = this.activeJob.items
+      .filter(i => i.status === 'queued')
+      .map(i => i.inputPath)
+
+    if (remainingInputPaths.length > 0) {
+      const diskCheck = await this.checkDiskSpace(this.activeJob.config.outputDir, remainingInputPaths)
+      if (!diskCheck.ok) {
+        this.logger.error('Not enough disk space to resume', { diskCheck })
+        this.isPaused = true // Re-pause
+        throw new Error('Not enough disk space to resume encoding')
+      }
+    }
+
+    // Emit resume event
+    this.emitEvent({
+      batchId: this.activeJob.id,
+      itemId: '',
+      kind: 'queue_resumed',
+      queueState: 'running'
+    })
+
+    // Continue processing
+    void this.processQueue()
+
+    return true
+  }
+
+  /**
+   * Check if a job is currently paused
+   */
+  getIsPaused(): boolean {
+    return this.isPaused
+  }
+
+  /**
+   * Check if there's a recoverable state from a previous crash or exit
+   * Returns null if there's already an active job (nothing to recover)
+   */
+  async checkForRecovery(): Promise<PersistedArchivalState | null> {
+    // If there's already an active job, no recovery needed
+    if (this.activeJob && (this.activeJob.status === 'running' || this.isPaused)) {
+      return null
+    }
+
+    try {
+      const state = await this.persistence.loadState()
+      if (state && state.job.status === 'running') {
+        // Found an interrupted job
+        this.logger.info('Found recoverable job state', {
+          jobId: state.job.id,
+          totalItems: state.job.totalItems,
+          completedItems: state.job.completedItems,
+          savedAt: state.savedAt
+        })
+        return state
+      }
+      return null
+    } catch (error) {
+      this.logger.warn('Failed to check for recovery state', { error })
+      return null
+    }
+  }
+
+  /**
+   * Resume from a recovered state after crash/restart
+   * Validates files and restarts the queue
+   */
+  async resumeFromRecovery(state: PersistedArchivalState): Promise<ArchivalBatchJob> {
+    if (this.activeJob && this.activeJob.status === 'running') {
+      throw new Error('Another archival job is already running')
+    }
+
+    this.logger.info('Resuming from recovery state', { jobId: state.job.id })
+
+    // Restore job state
+    this.activeJob = state.job
+
+    // Reset interrupted item to queued and clean up partial outputs
+    for (const item of this.activeJob.items) {
+      if (item.status === 'encoding' || item.status === 'analyzing') {
+        // Clean up any partial output
+        await this.cleanupPartialOutput(item.outputPath)
+        // Reset to queued
+        item.status = 'queued'
+        item.progress = 0
+        item.startedAt = undefined
+        item.encodingSpeed = undefined
+        item.etaSeconds = undefined
+        item.elapsedSeconds = undefined
+      }
+
+      // Validate source file still exists for queued items
+      if (item.status === 'queued') {
+        try {
+          await access(item.inputPath)
+        } catch {
+          // Source file missing
+          item.status = 'failed'
+          item.error = 'Source file no longer exists'
+          item.errorType = 'file_not_found'
+          item.completedAt = new Date().toISOString()
+          this.activeJob.failedItems++
+          this.logger.warn('Source file missing during recovery', { inputPath: item.inputPath })
+        }
+      }
+    }
+
+    // Clean up any two-pass log files from interrupted encoding
+    if (state.twoPassState) {
+      try {
+        await rm(state.twoPassState.passLogDir, { recursive: true, force: true })
+        this.logger.debug('Cleaned up two-pass log files', { dir: state.twoPassState.passLogDir })
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+
+    // Reset speed samples
+    this.speedSamples = []
+    this.isPaused = false
+
+    // Validate output directory still exists and is accessible
+    try {
+      await access(this.activeJob.config.outputDir)
+    } catch {
+      this.activeJob = null
+      throw new Error('Output directory no longer exists or is not accessible')
+    }
+
+    // Re-check disk space
+    const remainingInputPaths = this.activeJob.items
+      .filter(i => i.status === 'queued')
+      .map(i => i.inputPath)
+
+    if (remainingInputPaths.length > 0) {
+      const diskCheck = await this.checkDiskSpace(this.activeJob.config.outputDir, remainingInputPaths)
+      if (!diskCheck.ok) {
+        this.activeJob = null
+        throw new Error('Not enough disk space to resume encoding')
+      }
+    }
+
+    // Start processing
+    void this.processQueue()
+
+    return this.activeJob
+  }
+
+  /**
+   * Discard a recovered state and clean up
+   */
+  async discardRecovery(state: PersistedArchivalState): Promise<void> {
+    this.logger.info('Discarding recovery state', { jobId: state.job.id })
+
+    // Clean up partial outputs for any in-progress items
+    for (const item of state.job.items) {
+      if (item.status === 'encoding' || item.status === 'analyzing') {
+        await this.cleanupPartialOutput(item.outputPath)
+      }
+    }
+
+    // Clean up two-pass log files
+    if (state.twoPassState) {
+      try {
+        await rm(state.twoPassState.passLogDir, { recursive: true, force: true })
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+
+    // Clear persisted state
+    await this.persistence.clearState()
+
+    this.logger.info('Recovery state discarded')
+  }
+
+  /**
+   * Check if there's an active job (running or paused)
+   */
+  hasActiveJob(): boolean {
+    return this.activeJob !== null && (this.activeJob.status === 'running' || this.isPaused)
+  }
+
+  /**
+   * Save current state for graceful shutdown or crash recovery
+   */
+  async saveCurrentState(): Promise<void> {
+    if (!this.activeJob) return
+
+    const state: PersistedArchivalState = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      job: this.activeJob,
+      currentItemId: this.currentEncodingItemId
+    }
+
+    await this.persistence.saveState(state)
+    this.logger.debug('State saved', { jobId: this.activeJob.id })
   }
 
   /**
@@ -531,14 +814,34 @@ export class ArchivalService {
     if (!this.activeJob) return
 
     this.activeJob.status = 'running'
-    this.activeJob.startedAt = new Date().toISOString()
+    if (!this.activeJob.startedAt) {
+      this.activeJob.startedAt = new Date().toISOString()
+    }
     this.abortController = new AbortController()
 
     for (const item of this.activeJob.items) {
+      // Skip already completed/failed/skipped items (for recovery)
+      if (item.status === 'completed' || item.status === 'failed' || item.status === 'skipped') {
+        continue
+      }
+
+      // Check if paused
+      if (this.isPaused) {
+        this.logger.info('Queue paused, stopping processing')
+        this.abortController = null
+        return // Exit without completing batch
+      }
+
       if (this.abortController.signal.aborted) {
         item.status = 'cancelled'
         continue
       }
+
+      // Track current encoding item
+      this.currentEncodingItemId = item.id
+
+      // Save state before starting item (for crash recovery)
+      await this.saveCurrentState()
 
       try {
         await this.processItem(item)
@@ -548,7 +851,13 @@ export class ArchivalService {
           error: error instanceof Error ? error.message : 'Unknown error'
         })
       }
+
+      // Save state after item completes (for crash recovery)
+      await this.saveCurrentState()
     }
+
+    // Clear current encoding item
+    this.currentEncodingItemId = null
 
     const finalStatus = this.abortController.signal.aborted ? 'cancelled' : 'completed'
     this.activeJob.status = finalStatus
@@ -563,8 +872,12 @@ export class ArchivalService {
       totalItems: this.activeJob.totalItems
     })
 
+    // Clear persisted state on successful completion
+    await this.persistence.clearState()
+
     this.abortController = null
     this.fillModeSeenOutputs = null
+    this.isPaused = false
   }
 
   /**
@@ -654,6 +967,7 @@ export class ArchivalService {
         item.status = 'skipped'
         item.error = `Output (${this.formatBytes(item.outputSize)}) larger than input (${this.formatBytes(item.inputSize!)})`
         item.errorType = 'output_larger'
+        item.outputDeleted = true // Mark that output was deleted
         item.completedAt = new Date().toISOString()
         this.activeJob.skippedItems++
 
@@ -791,6 +1105,9 @@ export class ArchivalService {
       extendedMeta.bitDepth
     )
 
+    // Extract container format from file extension
+    const container = extname(filePath).toLowerCase().replace('.', '') || undefined
+
     return {
       width: meta.width ?? 1920,
       height: meta.height ?? 1080,
@@ -801,7 +1118,9 @@ export class ArchivalService {
       hdrFormat: extendedMeta.hdrFormat,
       isHdr,
       bitrate: meta.bitrate ?? undefined,
+      videoCodec: extendedMeta.videoCodec,
       audioCodec: extendedMeta.audioCodec,
+      container,
       // HDR10 static metadata
       masteringDisplay: extendedMeta.masteringDisplay,
       contentLightLevel: extendedMeta.contentLightLevel,
@@ -819,6 +1138,7 @@ export class ArchivalService {
     bitDepth?: number
     colorSpace?: string
     hdrFormat?: string | null
+    videoCodec?: string
     audioCodec?: string
     colorPrimaries?: string
     colorTransfer?: string
@@ -892,9 +1212,12 @@ export class ArchivalService {
           const audioStream = parsed.streams?.find(s => s.codec_type === 'audio')
 
           if (!videoStream) {
-            resolve({ audioCodec: audioStream?.codec_name })
+            resolve({ audioCodec: audioStream?.codec_name, videoCodec: undefined })
             return
           }
+
+          // Get video codec
+          const videoCodec = videoStream.codec_name
 
           // Detect bit depth
           const bitDepth = videoStream.bits_per_raw_sample
@@ -996,6 +1319,7 @@ export class ArchivalService {
             bitDepth,
             colorSpace,
             hdrFormat,
+            videoCodec,
             audioCodec,
             colorPrimaries,
             colorTransfer,

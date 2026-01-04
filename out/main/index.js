@@ -6066,6 +6066,17 @@ function classifyError(errorMessage2) {
   }
   return "unknown";
 }
+function getH265Level(width, height) {
+  const lumaSamples = width * height;
+  if (lumaSamples > 8912896) {
+    return 62;
+  } else if (lumaSamples > 2228224) {
+    return 51;
+  } else if (lumaSamples > 983040) {
+    return 41;
+  }
+  return 40;
+}
 function buildArchivalFFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapabilities) {
   if (config.codec === "h265") {
     return buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapabilities);
@@ -6135,10 +6146,14 @@ function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogF
     pass2.push("-pix_fmt", "yuv420p");
   }
   const needsWebmAudioReencode = config.container === "webm" && config.audioCopy && !isWebmCompatibleAudio(sourceInfo.audioCodec);
+  const needsMp4AudioReencode = config.container === "mp4" && config.audioCopy && isPcmAudio(sourceInfo.audioCodec);
   if (needsWebmAudioReencode) {
     pass2.push("-c:a", "libopus");
     pass2.push("-b:a", `${config.audioBitrate ?? 128}k`);
     pass2.push("-ar", "48000");
+  } else if (needsMp4AudioReencode) {
+    pass2.push("-c:a", "aac");
+    pass2.push("-b:a", `${config.audioBitrate ?? 192}k`);
   } else if (config.audioCopy) {
     pass2.push("-c:a", "copy");
   } else {
@@ -6199,7 +6214,11 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
   } else {
     pass2.push("-pix_fmt", "yuv420p");
   }
-  if (config.audioCopy) {
+  const needsMp4AudioReencode = config.container === "mp4" && config.audioCopy && isPcmAudio(sourceInfo.audioCodec);
+  if (needsMp4AudioReencode) {
+    pass2.push("-c:a", "aac");
+    pass2.push("-b:a", `${config.audioBitrate ?? 192}k`);
+  } else if (config.audioCopy) {
     pass2.push("-c:a", "copy");
   } else {
     pass2.push(...buildAudioArgs(config));
@@ -6241,11 +6260,8 @@ function buildX265ParamsWithPass(options, sourceInfo, passNumber, statsFile, cpu
     }
   }
   params.push("aq-mode=3");
-  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
-    params.push("level-idc=51");
-  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
-    params.push("level-idc=41");
-  }
+  const level = getH265Level(sourceInfo.width, sourceInfo.height);
+  params.push(`level-idc=${level}`);
   if (cpuCapabilities?.avx512) {
     params.push("asm=avx512");
   }
@@ -6297,10 +6313,14 @@ function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
     args.push("-pix_fmt", "yuv420p");
   }
   const needsWebmAudioReencode = config.container === "webm" && config.audioCopy && !isWebmCompatibleAudio(sourceInfo.audioCodec);
+  const needsMp4AudioReencode = config.container === "mp4" && config.audioCopy && isPcmAudio(sourceInfo.audioCodec);
   if (needsWebmAudioReencode) {
     args.push("-c:a", "libopus");
     args.push("-b:a", `${config.audioBitrate ?? 128}k`);
     args.push("-ar", "48000");
+  } else if (needsMp4AudioReencode) {
+    args.push("-c:a", "aac");
+    args.push("-b:a", `${config.audioBitrate ?? 192}k`);
   } else if (config.audioCopy) {
     args.push("-c:a", "copy");
   } else {
@@ -6336,7 +6356,11 @@ function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapab
   } else {
     args.push("-pix_fmt", "yuv420p");
   }
-  if (config.audioCopy) {
+  const needsMp4AudioReencode = config.container === "mp4" && config.audioCopy && isPcmAudio(sourceInfo.audioCodec);
+  if (needsMp4AudioReencode) {
+    args.push("-c:a", "aac");
+    args.push("-b:a", `${config.audioBitrate ?? 192}k`);
+  } else if (config.audioCopy) {
     args.push("-c:a", "copy");
   } else {
     args.push(...buildAudioArgs(config));
@@ -6432,11 +6456,8 @@ function buildX265Params(options, sourceInfo, cpuCapabilities) {
     }
   }
   params.push("aq-mode=3");
-  if (sourceInfo.width >= 3840 || sourceInfo.height >= 2160) {
-    params.push("level-idc=51");
-  } else if (sourceInfo.width >= 1920 || sourceInfo.height >= 1080) {
-    params.push("level-idc=41");
-  }
+  const level = getH265Level(sourceInfo.width, sourceInfo.height);
+  params.push(`level-idc=${level}`);
   if (cpuCapabilities?.avx512) {
     params.push("asm=avx512");
   }
@@ -6553,6 +6574,11 @@ function isWebmCompatibleAudio(audioCodec) {
   const codec = audioCodec.toLowerCase();
   return codec === "opus" || codec === "vorbis";
 }
+function isPcmAudio(audioCodec) {
+  if (!audioCodec) return false;
+  const codec = audioCodec.toLowerCase();
+  return codec.startsWith("pcm_");
+}
 function buildAudioArgs(config) {
   const args = [];
   switch (config.audioCodec) {
@@ -6616,8 +6642,11 @@ function describeArchivalSettings(config, sourceInfo) {
   let audioDesc;
   if (config.audioCopy) {
     const needsWebmReencode = config.container === "webm" && sourceInfo && !isWebmCompatibleAudio(sourceInfo.audioCodec);
+    const needsMp4Reencode = config.container === "mp4" && sourceInfo && isPcmAudio(sourceInfo.audioCodec);
     if (needsWebmReencode) {
       audioDesc = `Opus (re-encoded for WebM, source: ${sourceInfo.audioCodec || "unknown"})`;
+    } else if (needsMp4Reencode) {
+      audioDesc = `AAC (re-encoded for MP4, source: ${sourceInfo.audioCodec || "PCM"})`;
     } else {
       audioDesc = "Copy (lossless)";
     }
@@ -7355,6 +7384,7 @@ class ArchivalService {
         item.status = "skipped";
         item.error = `Output (${this.formatBytes(item.outputSize)}) larger than input (${this.formatBytes(item.inputSize)})`;
         item.errorType = "output_larger";
+        item.outputDeleted = true;
         item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
         this.activeJob.skippedItems++;
         this.emitEvent({
@@ -7466,6 +7496,7 @@ class ArchivalService {
       extendedMeta.hdrFormat,
       extendedMeta.bitDepth
     );
+    const container = extname(filePath).toLowerCase().replace(".", "") || void 0;
     return {
       width: meta.width ?? 1920,
       height: meta.height ?? 1080,
@@ -7476,7 +7507,9 @@ class ArchivalService {
       hdrFormat: extendedMeta.hdrFormat,
       isHdr,
       bitrate: meta.bitrate ?? void 0,
+      videoCodec: extendedMeta.videoCodec,
       audioCodec: extendedMeta.audioCodec,
+      container,
       // HDR10 static metadata
       masteringDisplay: extendedMeta.masteringDisplay,
       contentLightLevel: extendedMeta.contentLightLevel,
@@ -7514,9 +7547,10 @@ class ArchivalService {
           const videoStream = parsed.streams?.find((s) => s.codec_type === "video");
           const audioStream = parsed.streams?.find((s) => s.codec_type === "audio");
           if (!videoStream) {
-            resolve({ audioCodec: audioStream?.codec_name });
+            resolve({ audioCodec: audioStream?.codec_name, videoCodec: void 0 });
             return;
           }
+          const videoCodec = videoStream.codec_name;
           const bitDepth = videoStream.bits_per_raw_sample ? parseInt(videoStream.bits_per_raw_sample, 10) : void 0;
           const colorPrimaries = videoStream.color_primaries;
           const colorTransfer = videoStream.color_transfer;
@@ -7590,6 +7624,7 @@ class ArchivalService {
             bitDepth,
             colorSpace,
             hdrFormat,
+            videoCodec,
             audioCodec,
             colorPrimaries,
             colorTransfer,

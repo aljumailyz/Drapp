@@ -636,7 +636,9 @@ export type ArchivalVideoSourceInfo = {
   hdrFormat?: string | null
   isHdr: boolean
   bitrate?: number
+  videoCodec?: string
   audioCodec?: string
+  container?: string
 }
 
 export type ArchivalErrorType =
@@ -673,6 +675,9 @@ export type ArchivalBatchItem = {
   thumbnailPath?: string
   // Captions
   captionPath?: string
+  // Deletion tracking
+  originalDeleted?: boolean
+  outputDeleted?: boolean
 }
 
 export type ArchivalBatchJob = {
@@ -740,7 +745,7 @@ export type ArchivalEncodingConfigFull = {
 export type ArchivalProgressEvent = {
   batchId: string
   itemId: string
-  kind: 'item_start' | 'item_progress' | 'item_complete' | 'item_error' | 'batch_complete'
+  kind: 'item_start' | 'item_progress' | 'item_complete' | 'item_error' | 'batch_complete' | 'queue_paused' | 'queue_resumed'
   progress?: number
   status?: ArchivalJobStatus
   error?: string
@@ -760,6 +765,8 @@ export type ArchivalProgressEvent = {
   totalItems?: number
   // Captions
   captionPath?: string
+  // Queue state for pause/resume events
+  queueState?: 'running' | 'paused' | 'pending' | 'completed' | 'cancelled'
 }
 
 export type ArchivalSelectFilesResponse = {
@@ -1029,6 +1036,22 @@ export type Api = {
   }) => Promise<ArchivalStartBatchResponse>
   archivalGetStatus: () => Promise<ArchivalStatusResponse>
   archivalCancel: () => Promise<ArchivalCancelResponse>
+  archivalPause: () => Promise<{ ok: boolean; paused: boolean; error?: string }>
+  archivalResume: () => Promise<{ ok: boolean; resumed: boolean; error?: string }>
+  archivalCheckRecovery: () => Promise<{
+    ok: boolean
+    hasRecovery: boolean
+    recoveryInfo?: {
+      jobId: string
+      totalItems: number
+      completedItems: number
+      failedItems: number
+      savedAt: string
+    }
+  }>
+  archivalResumeRecovery: () => Promise<{ ok: boolean; job?: ArchivalBatchJob; error?: string }>
+  archivalDiscardRecovery: () => Promise<{ ok: boolean; error?: string }>
+  archivalGetPauseState: () => Promise<{ ok: boolean; isPaused: boolean }>
   archivalPreviewCommand: (payload: {
     inputPath: string
     outputDir: string
@@ -1213,6 +1236,28 @@ export const api: Api = {
     ipcRenderer.invoke('archival/get-status') as Promise<ArchivalStatusResponse>,
   archivalCancel: () =>
     ipcRenderer.invoke('archival/cancel') as Promise<ArchivalCancelResponse>,
+  archivalPause: () =>
+    ipcRenderer.invoke('archival/pause') as Promise<{ ok: boolean; paused: boolean; error?: string }>,
+  archivalResume: () =>
+    ipcRenderer.invoke('archival/resume') as Promise<{ ok: boolean; resumed: boolean; error?: string }>,
+  archivalCheckRecovery: () =>
+    ipcRenderer.invoke('archival/check-recovery') as Promise<{
+      ok: boolean
+      hasRecovery: boolean
+      recoveryInfo?: {
+        jobId: string
+        totalItems: number
+        completedItems: number
+        failedItems: number
+        savedAt: string
+      }
+    }>,
+  archivalResumeRecovery: () =>
+    ipcRenderer.invoke('archival/resume-recovery') as Promise<{ ok: boolean; job?: ArchivalBatchJob; error?: string }>,
+  archivalDiscardRecovery: () =>
+    ipcRenderer.invoke('archival/discard-recovery') as Promise<{ ok: boolean; error?: string }>,
+  archivalGetPauseState: () =>
+    ipcRenderer.invoke('archival/get-pause-state') as Promise<{ ok: boolean; isPaused: boolean }>,
   archivalPreviewCommand: (payload) =>
     ipcRenderer.invoke('archival/preview-command', payload) as Promise<ArchivalPreviewCommandResponse>,
   archivalEstimateSize: (inputPath) =>

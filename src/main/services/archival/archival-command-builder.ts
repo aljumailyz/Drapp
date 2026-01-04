@@ -212,10 +212,18 @@ function buildAv1TwoPassArgs(
     config.audioCopy &&
     !isWebmCompatibleAudio(sourceInfo.audioCodec)
 
+  const needsMp4AudioReencode = config.container === 'mp4' &&
+    config.audioCopy &&
+    isPcmAudio(sourceInfo.audioCodec)
+
   if (needsWebmAudioReencode) {
     pass2.push('-c:a', 'libopus')
     pass2.push('-b:a', `${config.audioBitrate ?? 128}k`)
     pass2.push('-ar', '48000')
+  } else if (needsMp4AudioReencode) {
+    // PCM audio must be transcoded for MP4 container
+    pass2.push('-c:a', 'aac')
+    pass2.push('-b:a', `${config.audioBitrate ?? 192}k`)
   } else if (config.audioCopy) {
     pass2.push('-c:a', 'copy')
   } else {
@@ -319,7 +327,16 @@ function buildH265TwoPassArgs(
   }
 
   // Audio handling (same as single-pass)
-  if (config.audioCopy) {
+  // MP4 containers cannot store PCM audio - must transcode to AAC
+  const needsMp4AudioReencode = config.container === 'mp4' &&
+    config.audioCopy &&
+    isPcmAudio(sourceInfo.audioCodec)
+
+  if (needsMp4AudioReencode) {
+    // PCM audio must be transcoded for MP4 container
+    pass2.push('-c:a', 'aac')
+    pass2.push('-b:a', `${config.audioBitrate ?? 192}k`)
+  } else if (config.audioCopy) {
     pass2.push('-c:a', 'copy')
   } else {
     pass2.push(...buildAudioArgs(config))
@@ -510,16 +527,25 @@ function buildAv1FFmpegArgs(
 
   // Audio handling
   // WebM container only supports Opus and Vorbis audio codecs
-  // If audioCopy is enabled but source audio is incompatible with WebM, re-encode to Opus
+  // MP4 container cannot store PCM audio
+  // If audioCopy is enabled but source audio is incompatible, re-encode appropriately
   const needsWebmAudioReencode = config.container === 'webm' &&
     config.audioCopy &&
     !isWebmCompatibleAudio(sourceInfo.audioCodec)
+
+  const needsMp4AudioReencode = config.container === 'mp4' &&
+    config.audioCopy &&
+    isPcmAudio(sourceInfo.audioCodec)
 
   if (needsWebmAudioReencode) {
     // Source audio is incompatible with WebM, re-encode to Opus
     args.push('-c:a', 'libopus')
     args.push('-b:a', `${config.audioBitrate ?? 128}k`)
     args.push('-ar', '48000')
+  } else if (needsMp4AudioReencode) {
+    // PCM audio must be transcoded for MP4 container - use AAC for best compatibility
+    args.push('-c:a', 'aac')
+    args.push('-b:a', `${config.audioBitrate ?? 192}k`)
   } else if (config.audioCopy) {
     args.push('-c:a', 'copy')
   } else {
@@ -596,7 +622,16 @@ function buildH265FFmpegArgs(
   }
 
   // Audio handling for H.265 (typically paired with AAC for web delivery)
-  if (config.audioCopy) {
+  // MP4 containers cannot store PCM audio - must transcode to AAC
+  const needsMp4AudioReencode = config.container === 'mp4' &&
+    config.audioCopy &&
+    isPcmAudio(sourceInfo.audioCodec)
+
+  if (needsMp4AudioReencode) {
+    // PCM audio must be transcoded for MP4 container
+    args.push('-c:a', 'aac')
+    args.push('-b:a', `${config.audioBitrate ?? 192}k`)
+  } else if (config.audioCopy) {
     args.push('-c:a', 'copy')
   } else {
     args.push(...buildAudioArgs(config))
@@ -1021,6 +1056,30 @@ function isWebmCompatibleAudio(audioCodec?: string): boolean {
 }
 
 /**
+ * Check if an audio codec is PCM (uncompressed)
+ * PCM audio cannot be stored in MP4 containers - needs transcoding
+ */
+function isPcmAudio(audioCodec?: string): boolean {
+  if (!audioCodec) return false
+  const codec = audioCodec.toLowerCase()
+  // PCM formats: pcm_s16le, pcm_s24le, pcm_s32le, pcm_f32le, pcm_s16be, etc.
+  return codec.startsWith('pcm_')
+}
+
+/**
+ * Check if an audio codec is compatible with MP4 container
+ * MP4 supports AAC, AC3, EAC3, ALAC, MP3, Opus, and FLAC (in some players)
+ * PCM audio is NOT supported in MP4
+ */
+function isMp4CompatibleAudio(audioCodec?: string): boolean {
+  if (!audioCodec) return false
+  const codec = audioCodec.toLowerCase()
+  // Common MP4-compatible audio codecs
+  const compatible = ['aac', 'mp3', 'ac3', 'eac3', 'alac', 'opus', 'flac']
+  return compatible.includes(codec) || !isPcmAudio(audioCodec)
+}
+
+/**
  * Build audio encoding arguments when not copying
  */
 function buildAudioArgs(config: ArchivalEncodingConfig): string[] {
@@ -1117,8 +1176,14 @@ export function describeArchivalSettings(
     const needsWebmReencode = config.container === 'webm' &&
       sourceInfo &&
       !isWebmCompatibleAudio(sourceInfo.audioCodec)
+    // Check if MP4 has PCM audio that needs re-encoding
+    const needsMp4Reencode = config.container === 'mp4' &&
+      sourceInfo &&
+      isPcmAudio(sourceInfo.audioCodec)
     if (needsWebmReencode) {
       audioDesc = `Opus (re-encoded for WebM, source: ${sourceInfo.audioCodec || 'unknown'})`
+    } else if (needsMp4Reencode) {
+      audioDesc = `AAC (re-encoded for MP4, source: ${sourceInfo.audioCodec || 'PCM'})`
     } else {
       audioDesc = 'Copy (lossless)'
     }

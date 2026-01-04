@@ -5,6 +5,7 @@ import { appendFile, copyFile, access, constants, writeFile } from 'node:fs/prom
 import { existsSync } from 'node:fs'
 import { getDatabase } from './database'
 import { registerIpcHandlers } from './ipc'
+import { getArchivalService } from './ipc/archival.ipc'
 import { DownloadWorker } from './queue/workers/download.worker'
 import { TranscodeWorker } from './queue/workers/transcode.worker'
 import { TranscriptionWorker } from './queue/workers/transcription.worker'
@@ -24,6 +25,7 @@ import { binaryDownloaderService } from './services/binary-downloader.service'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 let mainWindow: BrowserWindow | null = null
 let downloadWorker: DownloadWorker | null = null
+let isShuttingDown = false
 let transcodeWorker: TranscodeWorker | null = null
 let transcriptionWorker: TranscriptionWorker | null = null
 let smartTagging: SmartTaggingService | null = null
@@ -331,9 +333,26 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', async (event) => {
   downloadWorker?.stop()
   transcodeWorker?.stop()
   transcriptionWorker?.stop()
   void watchFolderService?.stop()
+
+  // Graceful shutdown for archival service - save state if encoding
+  const archivalService = getArchivalService()
+  if (!isShuttingDown && archivalService?.hasActiveJob()) {
+    isShuttingDown = true
+    appLogger.info('Saving archival state before quit')
+    event.preventDefault()
+    try {
+      // Pause the job - this kills FFmpeg, cleans up partial output, and saves state
+      await archivalService.pause()
+      appLogger.info('Archival state saved, quitting')
+    } catch (error) {
+      appLogger.error('Failed to save archival state', { error })
+    }
+    // Now quit for real
+    app.quit()
+  }
 })

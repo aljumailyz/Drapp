@@ -48,7 +48,9 @@ export interface VideoSourceInfo {
   hdrFormat?: string | null // HDR10, HLG, DolbyVision, etc.
   isHdr: boolean
   bitrate?: number // Source bitrate in bits per second
-  audioCodec?: string // Source audio codec (aac, opus, vorbis, flac, etc.)
+  videoCodec?: string // Source video codec (h264, hevc, vp9, av1, etc.)
+  audioCodec?: string // Source audio codec (aac, opus, vorbis, flac, pcm_s16le, etc.)
+  container?: string // Source container format (mp4, mkv, webm, mov, avi, etc.)
   // HDR10 static metadata (for proper HDR preservation)
   masteringDisplay?: HdrMasteringDisplayMetadata
   contentLightLevel?: HdrContentLightLevel
@@ -500,6 +502,9 @@ export interface ArchivalBatchItem {
   thumbnailPath?: string // Path to extracted thumbnail
   // Captions
   captionPath?: string // Path to extracted captions (.vtt file)
+  // Deletion tracking
+  originalDeleted?: boolean // True if the original file was deleted after successful encoding
+  outputDeleted?: boolean // True if output was deleted (e.g., larger than original)
 }
 
 /**
@@ -542,12 +547,49 @@ export interface ArchivalBatchJob {
 }
 
 /**
+ * Queue state for pause/resume functionality
+ */
+export type ArchivalQueueState = 'running' | 'paused' | 'pending' | 'completed' | 'cancelled'
+
+/**
+ * Persisted state for crash recovery
+ * Saved to disk to allow resuming after app restart or crash
+ */
+export interface PersistedArchivalState {
+  /** Schema version for future migrations */
+  version: 1
+  /** When this state was saved */
+  savedAt: string
+  /** The batch job state */
+  job: ArchivalBatchJob
+  /** ID of the item that was being encoded when paused/crashed (if any) */
+  currentItemId: string | null
+  /** Two-pass encoding state (if applicable) */
+  twoPassState?: {
+    passNumber: 1 | 2
+    passLogDir: string
+  }
+}
+
+/**
+ * Progress event kinds including pause/resume
+ */
+export type ArchivalProgressKind =
+  | 'item_start'
+  | 'item_progress'
+  | 'item_complete'
+  | 'item_error'
+  | 'batch_complete'
+  | 'queue_paused'
+  | 'queue_resumed'
+
+/**
  * Progress event for archival batch processing
  */
 export interface ArchivalProgressEvent {
   batchId: string
   itemId: string
-  kind: 'item_start' | 'item_progress' | 'item_complete' | 'item_error' | 'batch_complete'
+  kind: ArchivalProgressKind
   progress?: number
   status?: ArchivalJobStatus
   error?: string
@@ -569,6 +611,8 @@ export interface ArchivalProgressEvent {
   thumbnailPath?: string // Path to extracted thumbnail
   // Captions
   captionPath?: string // Path to extracted captions (.vtt file)
+  // Queue state for pause/resume events
+  queueState?: ArchivalQueueState
 }
 
 /**

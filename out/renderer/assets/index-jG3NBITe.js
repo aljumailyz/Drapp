@@ -8496,6 +8496,60 @@ function Archive() {
     }
     return `${mins}:${String(secs).padStart(2, "0")}`;
   };
+  const formatVideoCodec = (codec) => {
+    if (!codec) return "Unknown";
+    const codecMap = {
+      "h264": "H.264",
+      "hevc": "HEVC",
+      "h265": "H.265",
+      "vp9": "VP9",
+      "av1": "AV1",
+      "mpeg4": "MPEG-4",
+      "prores": "ProRes",
+      "dnxhd": "DNxHD",
+      "vp8": "VP8",
+      "mjpeg": "MJPEG"
+    };
+    return codecMap[codec.toLowerCase()] ?? codec.toUpperCase();
+  };
+  const formatAudioCodec = (codec) => {
+    if (!codec) return "";
+    const codecMap = {
+      "aac": "AAC",
+      "mp3": "MP3",
+      "opus": "Opus",
+      "vorbis": "Vorbis",
+      "flac": "FLAC",
+      "alac": "ALAC",
+      "ac3": "AC3",
+      "eac3": "E-AC3",
+      "dts": "DTS",
+      "pcm_s16le": "PCM",
+      "pcm_s24le": "PCM",
+      "pcm_s32le": "PCM",
+      "pcm_f32le": "PCM",
+      "pcm_s16be": "PCM",
+      "pcm_s24be": "PCM",
+      "pcm_s32be": "PCM"
+    };
+    if (codec.toLowerCase().startsWith("pcm_")) {
+      return "PCM";
+    }
+    return codecMap[codec.toLowerCase()] ?? codec.toUpperCase();
+  };
+  const isPcmAudio = (codec) => {
+    if (!codec) return false;
+    return codec.toLowerCase().startsWith("pcm_");
+  };
+  const formatResolution2 = (width, height) => {
+    if (!width || !height) return "";
+    const maxDim = Math.max(width, height);
+    if (maxDim >= 3840) return `${width}×${height} (4K)`;
+    if (maxDim >= 2560) return `${width}×${height} (1440p)`;
+    if (maxDim >= 1920) return `${width}×${height} (1080p)`;
+    if (maxDim >= 1280) return `${width}×${height} (720p)`;
+    return `${width}×${height}`;
+  };
   const statusTone = (status) => {
     switch (status) {
       case "completed":
@@ -9418,7 +9472,59 @@ function Archive() {
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "mt-4 max-h-64 space-y-2 overflow-y-auto", children: currentJob.items.map((item) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-slate-100 bg-slate-50 px-3 py-2", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between gap-2", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "flex-1 truncate text-sm font-medium text-slate-700", children: item.inputPath.split(/[/\\]/).pop() }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusTone(item.status)}`, children: item.status })
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex shrink-0 items-center gap-1.5", children: [
+            item.originalDeleted && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-medium text-rose-600", title: "Original file deleted", children: "🗑️ Original" }),
+            item.outputDeleted && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-600", title: "Output deleted (was larger)", children: "🗑️ Output" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusTone(item.status)}`, children: item.status })
+          ] })
+        ] }),
+        item.sourceInfo && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { title: "Video codec", children: formatVideoCodec(item.sourceInfo.videoCodec) }),
+          item.sourceInfo.audioCodec && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-300", children: "/" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { title: "Audio codec", children: formatAudioCodec(item.sourceInfo.audioCodec) })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-300", children: "·" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { title: "Container", children: (item.sourceInfo.container ?? item.inputPath.split(".").pop())?.toUpperCase() }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-300", children: "·" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { title: "Resolution", children: formatResolution2(item.sourceInfo.width, item.sourceInfo.height) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-300", children: "·" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { title: "Duration", children: formatDuration2(item.sourceInfo.duration) }),
+          item.sourceInfo.isHdr ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-300", children: "·" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-medium text-purple-600", title: item.sourceInfo.hdrFormat ?? "HDR", children: item.sourceInfo.hdrFormat ?? "HDR" })
+          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-300", children: "·" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-400", children: "SDR" })
+          ] }),
+          item.inputSize && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-slate-300", children: "·" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { title: "File size", className: "font-medium", children: [
+              formatFileSize2(item.inputSize),
+              item.outputSize && item.status === "completed" && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-emerald-600", children: [
+                " → ",
+                formatFileSize2(item.outputSize)
+              ] }),
+              !item.outputSize && (item.status === "queued" || item.status === "analyzing") && item.sourceInfo.duration > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-slate-400", title: "Estimated output size based on codec settings", children: [
+                " ",
+                "→ ~",
+                formatFileSize2(
+                  // Estimate: duration × target bitrate based on job's codec
+                  // For AV1 CRF 30, roughly 1-2 Mbps for 1080p
+                  // For H.265 CRF 23, roughly 2-4 Mbps for 1080p
+                  item.sourceInfo.duration * (currentJob.config.codec === "h265" ? 35e4 : 2e5)
+                )
+              ] })
+            ] })
+          ] }),
+          isPcmAudio(item.sourceInfo.audioCodec) && currentJob.config.container === "mp4" && currentJob.config.audioCopy !== false && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "span",
+            {
+              className: "ml-1 rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium text-amber-700",
+              title: "PCM audio will be transcoded to AAC for MP4 compatibility",
+              children: "PCM→AAC"
+            }
+          )
         ] }),
         item.status === "encoding" && item.progress != null && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "h-1.5 w-full overflow-hidden rounded-full bg-slate-200", children: /* @__PURE__ */ jsxRuntimeExports.jsx(

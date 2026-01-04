@@ -6,6 +6,7 @@ import type {
   ArchivalProgressEvent,
   ArchivalVideoSourceInfo
 } from '../../preload/api'
+import type { ArchivalQueueState } from '../../shared/types/archival.types'
 import {
   ARCHIVAL_PRESETS,
   ARCHIVAL_CRF_DEFAULTS,
@@ -128,6 +129,19 @@ export default function Archive(): JSX.Element {
   const [whisperGpuAvailable, setWhisperGpuAvailable] = useState(false)
   const [whisperGpuType, setWhisperGpuType] = useState<'metal' | 'none'>('none')
   const [whisperGpuReason, setWhisperGpuReason] = useState<string | undefined>()
+  // Queue pause/resume state
+  const [queueState, setQueueState] = useState<ArchivalQueueState>('pending')
+  const [isPauseLoading, setIsPauseLoading] = useState(false)
+  // Recovery state
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false)
+  const [recoveryInfo, setRecoveryInfo] = useState<{
+    jobId: string
+    totalItems: number
+    completedItems: number
+    failedItems: number
+    savedAt: string
+  } | null>(null)
+  const [isRecovering, setIsRecovering] = useState(false)
 
   // Load default config and encoder info on mount
   useEffect(() => {
@@ -138,8 +152,10 @@ export default function Archive(): JSX.Element {
       window.api.archivalDetectEncoders(),
       window.api.archivalGetStatus(),
       window.api.getWhisperProvider(),
-      window.api.getWhisperGpuSettings()
-    ]).then(([configResult, encoderResult, statusResult, whisperResult, gpuResult]) => {
+      window.api.getWhisperGpuSettings(),
+      window.api.archivalCheckRecovery(),
+      window.api.archivalGetPauseState()
+    ]).then(([configResult, encoderResult, statusResult, whisperResult, gpuResult, recoveryResult, pauseResult]) => {
       if (!active) return
       // Load whisper provider settings
       if (whisperResult.ok) {
@@ -190,6 +206,19 @@ export default function Archive(): JSX.Element {
       }
       if (statusResult.ok && statusResult.job) {
         setCurrentJob(statusResult.job)
+        // Set queue state based on job status
+        if (statusResult.job.status === 'running') {
+          setQueueState('running')
+        }
+      }
+      // Check for crash recovery (only if no active job)
+      if (!statusResult.job && recoveryResult.ok && recoveryResult.hasRecovery && recoveryResult.recoveryInfo) {
+        setRecoveryInfo(recoveryResult.recoveryInfo)
+        setShowRecoveryModal(true)
+      }
+      // Get current pause state
+      if (pauseResult.ok && pauseResult.isPaused) {
+        setQueueState('paused')
       }
     }).catch(() => {
       if (active) {
@@ -216,11 +245,27 @@ export default function Archive(): JSX.Element {
         }
       }
 
+      // Handle pause/resume events
+      if (event.kind === 'queue_paused') {
+        setQueueState('paused')
+        setIsPauseLoading(false)
+      }
+      if (event.kind === 'queue_resumed') {
+        setQueueState('running')
+        setIsPauseLoading(false)
+      }
+
+      // Update queue state from event
+      if (event.queueState) {
+        setQueueState(event.queueState)
+      }
+
       // Reset ETA when batch completes
       if (event.kind === 'batch_complete') {
         setBatchEta(undefined)
         setBatchSpeed(undefined)
         setBatchProgress(100)
+        setQueueState('completed')
       }
 
       setCurrentJob((prev) => {
@@ -497,8 +542,75 @@ export default function Archive(): JSX.Element {
   const handleCancel = async (): Promise<void> => {
     try {
       await window.api.archivalCancel()
+      setQueueState('cancelled')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to cancel')
+    }
+  }
+
+  const handlePause = async (): Promise<void> => {
+    setIsPauseLoading(true)
+    try {
+      const result = await window.api.archivalPause()
+      if (!result.ok) {
+        setError(result.error ?? 'Failed to pause')
+        setIsPauseLoading(false)
+      }
+      // State will be updated via event
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to pause')
+      setIsPauseLoading(false)
+    }
+  }
+
+  const handleResume = async (): Promise<void> => {
+    setIsPauseLoading(true)
+    try {
+      const result = await window.api.archivalResume()
+      if (!result.ok) {
+        setError(result.error ?? 'Failed to resume')
+        setIsPauseLoading(false)
+      }
+      // State will be updated via event
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resume')
+      setIsPauseLoading(false)
+    }
+  }
+
+  const handleResumeRecovery = async (): Promise<void> => {
+    setIsRecovering(true)
+    try {
+      const result = await window.api.archivalResumeRecovery()
+      if (result.ok && result.job) {
+        setCurrentJob(result.job)
+        setQueueState('running')
+        setShowRecoveryModal(false)
+        setRecoveryInfo(null)
+      } else {
+        setError(result.error ?? 'Failed to resume recovery')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resume recovery')
+    } finally {
+      setIsRecovering(false)
+    }
+  }
+
+  const handleDiscardRecovery = async (): Promise<void> => {
+    setIsRecovering(true)
+    try {
+      const result = await window.api.archivalDiscardRecovery()
+      if (result.ok) {
+        setShowRecoveryModal(false)
+        setRecoveryInfo(null)
+      } else {
+        setError(result.error ?? 'Failed to discard recovery')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to discard recovery')
+    } finally {
+      setIsRecovering(false)
     }
   }
 
@@ -581,6 +693,66 @@ export default function Archive(): JSX.Element {
       return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
     }
     return `${mins}:${String(secs).padStart(2, '0')}`
+  }
+
+  const formatVideoCodec = (codec?: string): string => {
+    if (!codec) return 'Unknown'
+    const codecMap: Record<string, string> = {
+      'h264': 'H.264',
+      'hevc': 'HEVC',
+      'h265': 'H.265',
+      'vp9': 'VP9',
+      'av1': 'AV1',
+      'mpeg4': 'MPEG-4',
+      'prores': 'ProRes',
+      'dnxhd': 'DNxHD',
+      'vp8': 'VP8',
+      'mjpeg': 'MJPEG'
+    }
+    return codecMap[codec.toLowerCase()] ?? codec.toUpperCase()
+  }
+
+  const formatAudioCodec = (codec?: string): string => {
+    if (!codec) return ''
+    const codecMap: Record<string, string> = {
+      'aac': 'AAC',
+      'mp3': 'MP3',
+      'opus': 'Opus',
+      'vorbis': 'Vorbis',
+      'flac': 'FLAC',
+      'alac': 'ALAC',
+      'ac3': 'AC3',
+      'eac3': 'E-AC3',
+      'dts': 'DTS',
+      'pcm_s16le': 'PCM',
+      'pcm_s24le': 'PCM',
+      'pcm_s32le': 'PCM',
+      'pcm_f32le': 'PCM',
+      'pcm_s16be': 'PCM',
+      'pcm_s24be': 'PCM',
+      'pcm_s32be': 'PCM'
+    }
+    // Handle PCM variants
+    if (codec.toLowerCase().startsWith('pcm_')) {
+      return 'PCM'
+    }
+    return codecMap[codec.toLowerCase()] ?? codec.toUpperCase()
+  }
+
+  const isPcmAudio = (codec?: string): boolean => {
+    if (!codec) return false
+    return codec.toLowerCase().startsWith('pcm_')
+  }
+
+  const formatResolution = (width?: number, height?: number): string => {
+    if (!width || !height) return ''
+    // Common resolution names
+    const maxDim = Math.max(width, height)
+    if (maxDim >= 3840) return `${width}×${height} (4K)`
+    if (maxDim >= 2560) return `${width}×${height} (1440p)`
+    if (maxDim >= 1920) return `${width}×${height} (1080p)`
+    if (maxDim >= 1280) return `${width}×${height} (720p)`
+    return `${width}×${height}`
   }
 
   const statusTone = (status: string): string => {
@@ -1529,6 +1701,11 @@ export default function Archive(): JSX.Element {
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusTone(currentJob.status)}`}>
                   {currentJob.status}
                 </span>
+                {queueState === 'paused' && currentJob.status === 'running' && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                    Paused
+                  </span>
+                )}
               </div>
               <p className="mt-1 text-sm text-slate-500">
                 {currentJob.completedItems} of {currentJob.totalItems} completed
@@ -1536,14 +1713,38 @@ export default function Archive(): JSX.Element {
                 {currentJob.skippedItems > 0 && ` · ${currentJob.skippedItems} skipped`}
               </p>
             </div>
-            {currentJob.status === 'running' && (
-              <button
-                type="button"
-                onClick={() => void handleCancel()}
-                className="rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-rose-600"
-              >
-                Cancel
-              </button>
+            {(currentJob.status === 'running' || queueState === 'paused') && (
+              <div className="flex items-center gap-2">
+                {/* Pause/Resume button */}
+                {queueState === 'running' && (
+                  <button
+                    type="button"
+                    onClick={() => void handlePause()}
+                    disabled={isPauseLoading}
+                    className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-600 disabled:opacity-50"
+                  >
+                    {isPauseLoading ? 'Pausing...' : 'Pause'}
+                  </button>
+                )}
+                {queueState === 'paused' && (
+                  <button
+                    type="button"
+                    onClick={() => void handleResume()}
+                    disabled={isPauseLoading}
+                    className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-600 disabled:opacity-50"
+                  >
+                    {isPauseLoading ? 'Resuming...' : 'Resume'}
+                  </button>
+                )}
+                {/* Cancel button */}
+                <button
+                  type="button"
+                  onClick={() => void handleCancel()}
+                  className="rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-rose-600"
+                >
+                  Cancel
+                </button>
+              </div>
             )}
           </div>
 
@@ -1570,7 +1771,7 @@ export default function Archive(): JSX.Element {
           </div>
 
           {/* Batch stats summary */}
-          {currentJob.status === 'running' && (
+          {(currentJob.status === 'running' || queueState === 'paused') && (
             <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 sm:grid-cols-4">
               <div className="text-center">
                 <p className="text-xs text-slate-400">Speed</p>
@@ -1639,10 +1840,85 @@ export default function Archive(): JSX.Element {
                   <p className="flex-1 truncate text-sm font-medium text-slate-700">
                     {item.inputPath.split(/[/\\]/).pop()}
                   </p>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusTone(item.status)}`}>
-                    {item.status}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {/* Deletion indicators */}
+                    {item.originalDeleted && (
+                      <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-medium text-rose-600" title="Original file deleted">
+                        🗑️ Original
+                      </span>
+                    )}
+                    {item.outputDeleted && (
+                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Output deleted (was larger)">
+                        🗑️ Output
+                      </span>
+                    )}
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusTone(item.status)}`}>
+                      {item.status}
+                    </span>
+                  </div>
                 </div>
+                {/* Source metadata row */}
+                {item.sourceInfo && (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+                    <span title="Video codec">{formatVideoCodec(item.sourceInfo.videoCodec)}</span>
+                    {item.sourceInfo.audioCodec && (
+                      <>
+                        <span className="text-slate-300">/</span>
+                        <span title="Audio codec">{formatAudioCodec(item.sourceInfo.audioCodec)}</span>
+                      </>
+                    )}
+                    <span className="text-slate-300">·</span>
+                    <span title="Container">{(item.sourceInfo.container ?? item.inputPath.split('.').pop())?.toUpperCase()}</span>
+                    <span className="text-slate-300">·</span>
+                    <span title="Resolution">{formatResolution(item.sourceInfo.width, item.sourceInfo.height)}</span>
+                    <span className="text-slate-300">·</span>
+                    <span title="Duration">{formatDuration(item.sourceInfo.duration)}</span>
+                    {item.sourceInfo.isHdr ? (
+                      <>
+                        <span className="text-slate-300">·</span>
+                        <span className="font-medium text-purple-600" title={item.sourceInfo.hdrFormat ?? 'HDR'}>
+                          {item.sourceInfo.hdrFormat ?? 'HDR'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-slate-300">·</span>
+                        <span className="text-slate-400">SDR</span>
+                      </>
+                    )}
+                    {/* Source file size with output/estimated */}
+                    {item.inputSize && (
+                      <>
+                        <span className="text-slate-300">·</span>
+                        <span title="File size" className="font-medium">
+                          {formatFileSize(item.inputSize)}
+                          {item.outputSize && item.status === 'completed' && (
+                            <span className="text-emerald-600"> → {formatFileSize(item.outputSize)}</span>
+                          )}
+                          {!item.outputSize && (item.status === 'queued' || item.status === 'analyzing') && item.sourceInfo.duration > 0 && (
+                            <span className="text-slate-400" title="Estimated output size based on codec settings">
+                              {' '}→ ~{formatFileSize(
+                                // Estimate: duration × target bitrate based on job's codec
+                                // For AV1 CRF 30, roughly 1-2 Mbps for 1080p
+                                // For H.265 CRF 23, roughly 2-4 Mbps for 1080p
+                                item.sourceInfo.duration * (currentJob.config.codec === 'h265' ? 350000 : 200000)
+                              )}
+                            </span>
+                          )}
+                        </span>
+                      </>
+                    )}
+                    {/* PCM audio transcoding warning - use job config, not UI config */}
+                    {isPcmAudio(item.sourceInfo.audioCodec) && currentJob.config.container === 'mp4' && currentJob.config.audioCopy !== false && (
+                      <span
+                        className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium text-amber-700"
+                        title="PCM audio will be transcoded to AAC for MP4 compatibility"
+                      >
+                        PCM→AAC
+                      </span>
+                    )}
+                  </div>
+                )}
                 {item.status === 'encoding' && item.progress != null && (
                   <div className="mt-2">
                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
@@ -1693,6 +1969,72 @@ export default function Archive(): JSX.Element {
             ))}
           </div>
         </section>
+      )}
+
+      {/* Recovery Modal */}
+      {showRecoveryModal && recoveryInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100">
+                <svg className="h-5 w-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Interrupted Batch Found</h3>
+                <p className="text-sm text-slate-500">Would you like to resume encoding?</p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-slate-100 bg-slate-50 p-3">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-xs text-slate-400">Total Items</p>
+                  <p className="font-semibold text-slate-700">{recoveryInfo.totalItems}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Completed</p>
+                  <p className="font-semibold text-emerald-600">{recoveryInfo.completedItems}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Failed</p>
+                  <p className={`font-semibold ${recoveryInfo.failedItems > 0 ? 'text-rose-600' : 'text-slate-700'}`}>
+                    {recoveryInfo.failedItems}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Remaining</p>
+                  <p className="font-semibold text-slate-700">
+                    {recoveryInfo.totalItems - recoveryInfo.completedItems - recoveryInfo.failedItems}
+                  </p>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-slate-400">
+                Interrupted: {new Date(recoveryInfo.savedAt).toLocaleString()}
+              </p>
+            </div>
+
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={() => void handleDiscardRecovery()}
+                disabled={isRecovering}
+                className="flex-1 rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50"
+              >
+                {isRecovering ? 'Processing...' : 'Discard'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleResumeRecovery()}
+                disabled={isRecovering}
+                className="flex-1 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {isRecovering ? 'Resuming...' : 'Resume Encoding'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -75,6 +75,13 @@ async function findVideoFilesRecursively(
 
 let archivalService: ArchivalService | null = null
 
+/**
+ * Get the archival service instance (for use by other modules like graceful shutdown)
+ */
+export function getArchivalService(): ArchivalService | null {
+  return archivalService
+}
+
 function getMainWindow(): BrowserWindow | null {
   const windows = BrowserWindow.getAllWindows()
   return windows.length > 0 ? windows[0] : null
@@ -328,6 +335,133 @@ export function registerArchivalHandlers(): void {
     const service = getService()
     const canceled = service.cancel()
     return { ok: true, canceled }
+  })
+
+  /**
+   * Pause the current batch (stops immediately)
+   */
+  ipcMain.handle('archival/pause', async (): Promise<{ ok: boolean; paused: boolean; error?: string }> => {
+    try {
+      const service = getService()
+      const paused = await service.pause()
+      return { ok: true, paused }
+    } catch (error) {
+      return {
+        ok: false,
+        paused: false,
+        error: error instanceof Error ? error.message : 'Failed to pause'
+      }
+    }
+  })
+
+  /**
+   * Resume a paused batch
+   */
+  ipcMain.handle('archival/resume', async (): Promise<{ ok: boolean; resumed: boolean; error?: string }> => {
+    try {
+      const service = getService()
+      const resumed = await service.resume()
+      return { ok: true, resumed }
+    } catch (error) {
+      return {
+        ok: false,
+        resumed: false,
+        error: error instanceof Error ? error.message : 'Failed to resume'
+      }
+    }
+  })
+
+  /**
+   * Check if there's a recoverable state from a crash/exit
+   */
+  ipcMain.handle('archival/check-recovery', async (): Promise<{
+    ok: boolean
+    hasRecovery: boolean
+    recoveryInfo?: {
+      jobId: string
+      totalItems: number
+      completedItems: number
+      failedItems: number
+      savedAt: string
+    }
+  }> => {
+    try {
+      const service = getService()
+      const state = await service.checkForRecovery()
+
+      if (state) {
+        return {
+          ok: true,
+          hasRecovery: true,
+          recoveryInfo: {
+            jobId: state.job.id,
+            totalItems: state.job.totalItems,
+            completedItems: state.job.completedItems,
+            failedItems: state.job.failedItems,
+            savedAt: state.savedAt
+          }
+        }
+      }
+
+      return { ok: true, hasRecovery: false }
+    } catch (error) {
+      return { ok: false, hasRecovery: false }
+    }
+  })
+
+  /**
+   * Resume from a recovered state
+   */
+  ipcMain.handle('archival/resume-recovery', async (): Promise<{
+    ok: boolean
+    job?: ArchivalBatchJob
+    error?: string
+  }> => {
+    try {
+      const service = getService()
+      const state = await service.checkForRecovery()
+
+      if (!state) {
+        return { ok: false, error: 'No recovery state found' }
+      }
+
+      const job = await service.resumeFromRecovery(state)
+      return { ok: true, job }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to resume from recovery'
+      }
+    }
+  })
+
+  /**
+   * Discard a recovered state
+   */
+  ipcMain.handle('archival/discard-recovery', async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const service = getService()
+      const state = await service.checkForRecovery()
+
+      if (state) {
+        await service.discardRecovery(state)
+      }
+
+      return { ok: true }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to discard recovery'
+      }
+    }
+  })
+
+  /**
+   * Get pause state
+   */
+  ipcMain.handle('archival/get-pause-state', async (): Promise<{ ok: boolean; isPaused: boolean }> => {
+    const service = getService()
+    return { ok: true, isPaused: service.getIsPaused() }
   })
 
   /**
