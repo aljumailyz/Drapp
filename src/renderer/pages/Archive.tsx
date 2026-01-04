@@ -526,6 +526,7 @@ export default function Archive(): JSX.Element {
 
       if (result.job) {
         setCurrentJob(result.job)
+        setQueueState('running')
         // Clear inputs after starting
         setInputPaths([])
         setSourceInfo(null)

@@ -8114,6 +8114,11 @@ function Archive() {
   const [whisperGpuAvailable, setWhisperGpuAvailable] = reactExports.useState(false);
   const [whisperGpuType, setWhisperGpuType] = reactExports.useState("none");
   const [whisperGpuReason, setWhisperGpuReason] = reactExports.useState();
+  const [queueState, setQueueState] = reactExports.useState("pending");
+  const [isPauseLoading, setIsPauseLoading] = reactExports.useState(false);
+  const [showRecoveryModal, setShowRecoveryModal] = reactExports.useState(false);
+  const [recoveryInfo, setRecoveryInfo] = reactExports.useState(null);
+  const [isRecovering, setIsRecovering] = reactExports.useState(false);
   reactExports.useEffect(() => {
     let active = true;
     Promise.all([
@@ -8121,8 +8126,10 @@ function Archive() {
       window.api.archivalDetectEncoders(),
       window.api.archivalGetStatus(),
       window.api.getWhisperProvider(),
-      window.api.getWhisperGpuSettings()
-    ]).then(([configResult, encoderResult, statusResult, whisperResult, gpuResult]) => {
+      window.api.getWhisperGpuSettings(),
+      window.api.archivalCheckRecovery(),
+      window.api.archivalGetPauseState()
+    ]).then(([configResult, encoderResult, statusResult, whisperResult, gpuResult, recoveryResult, pauseResult]) => {
       if (!active) return;
       if (whisperResult.ok) {
         if (whisperResult.provider) {
@@ -8166,6 +8173,16 @@ function Archive() {
       }
       if (statusResult.ok && statusResult.job) {
         setCurrentJob(statusResult.job);
+        if (statusResult.job.status === "running") {
+          setQueueState("running");
+        }
+      }
+      if (!statusResult.job && recoveryResult.ok && recoveryResult.hasRecovery && recoveryResult.recoveryInfo) {
+        setRecoveryInfo(recoveryResult.recoveryInfo);
+        setShowRecoveryModal(true);
+      }
+      if (pauseResult.ok && pauseResult.isPaused) {
+        setQueueState("paused");
       }
     }).catch(() => {
       if (active) {
@@ -8189,10 +8206,22 @@ function Archive() {
           setBatchProgress(event.batchProgress);
         }
       }
+      if (event.kind === "queue_paused") {
+        setQueueState("paused");
+        setIsPauseLoading(false);
+      }
+      if (event.kind === "queue_resumed") {
+        setQueueState("running");
+        setIsPauseLoading(false);
+      }
+      if (event.queueState) {
+        setQueueState(event.queueState);
+      }
       if (event.kind === "batch_complete") {
         setBatchEta(void 0);
         setBatchSpeed(void 0);
         setBatchProgress(100);
+        setQueueState("completed");
       }
       setCurrentJob((prev) => {
         if (!prev || prev.id !== event.batchId) return prev;
@@ -8429,8 +8458,69 @@ function Archive() {
   const handleCancel = async () => {
     try {
       await window.api.archivalCancel();
+      setQueueState("cancelled");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to cancel");
+    }
+  };
+  const handlePause = async () => {
+    setIsPauseLoading(true);
+    try {
+      const result = await window.api.archivalPause();
+      if (!result.ok) {
+        setError(result.error ?? "Failed to pause");
+        setIsPauseLoading(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to pause");
+      setIsPauseLoading(false);
+    }
+  };
+  const handleResume = async () => {
+    setIsPauseLoading(true);
+    try {
+      const result = await window.api.archivalResume();
+      if (!result.ok) {
+        setError(result.error ?? "Failed to resume");
+        setIsPauseLoading(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to resume");
+      setIsPauseLoading(false);
+    }
+  };
+  const handleResumeRecovery = async () => {
+    setIsRecovering(true);
+    try {
+      const result = await window.api.archivalResumeRecovery();
+      if (result.ok && result.job) {
+        setCurrentJob(result.job);
+        setQueueState("running");
+        setShowRecoveryModal(false);
+        setRecoveryInfo(null);
+      } else {
+        setError(result.error ?? "Failed to resume recovery");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to resume recovery");
+    } finally {
+      setIsRecovering(false);
+    }
+  };
+  const handleDiscardRecovery = async () => {
+    setIsRecovering(true);
+    try {
+      const result = await window.api.archivalDiscardRecovery();
+      if (result.ok) {
+        setShowRecoveryModal(false);
+        setRecoveryInfo(null);
+      } else {
+        setError(result.error ?? "Failed to discard recovery");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to discard recovery");
+    } finally {
+      setIsRecovering(false);
     }
   };
   const handleUpgradeFFmpeg = async () => {
@@ -9379,7 +9469,8 @@ function Archive() {
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "text-lg font-semibold text-slate-900", children: "Current Batch" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusTone(currentJob.status)}`, children: currentJob.status })
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusTone(currentJob.status)}`, children: currentJob.status }),
+            queueState === "paused" && currentJob.status === "running" && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700", children: "Paused" })
           ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-1 text-sm text-slate-500", children: [
             currentJob.completedItems,
@@ -9390,15 +9481,37 @@ function Archive() {
             currentJob.skippedItems > 0 && ` · ${currentJob.skippedItems} skipped`
           ] })
         ] }),
-        currentJob.status === "running" && /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            type: "button",
-            onClick: () => void handleCancel(),
-            className: "rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-rose-600",
-            children: "Cancel"
-          }
-        )
+        (currentJob.status === "running" || queueState === "paused") && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2", children: [
+          queueState === "running" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              type: "button",
+              onClick: () => void handlePause(),
+              disabled: isPauseLoading,
+              className: "rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-600 disabled:opacity-50",
+              children: isPauseLoading ? "Pausing..." : "Pause"
+            }
+          ),
+          queueState === "paused" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              type: "button",
+              onClick: () => void handleResume(),
+              disabled: isPauseLoading,
+              className: "rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-600 disabled:opacity-50",
+              children: isPauseLoading ? "Resuming..." : "Resume"
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              type: "button",
+              onClick: () => void handleCancel(),
+              className: "rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-rose-600",
+              children: "Cancel"
+            }
+          )
+        ] })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-4", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between text-xs text-slate-500", children: [
@@ -9426,7 +9539,7 @@ function Archive() {
           }
         ) })
       ] }),
-      currentJob.status === "running" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 sm:grid-cols-4", children: [
+      (currentJob.status === "running" || queueState === "paused") && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 sm:grid-cols-4", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-center", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Speed" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-semibold text-slate-700", children: batchSpeed !== void 0 ? formatSpeed(batchSpeed) : "--" })
@@ -9571,7 +9684,62 @@ function Archive() {
         ] }),
         item.error && item.errorType !== "output_larger" && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-[10px] text-rose-600", children: item.errorType ? getErrorMessage(item.errorType) : item.error })
       ] }, item.id)) })
-    ] })
+    ] }),
+    showRecoveryModal && recoveryInfo && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/50", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-3", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex h-10 w-10 items-center justify-center rounded-full bg-amber-100", children: /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { className: "h-5 w-5 text-amber-600", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", children: /* @__PURE__ */ jsxRuntimeExports.jsx("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 2, d: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" }) }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "text-lg font-semibold text-slate-900", children: "Interrupted Batch Found" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-slate-500", children: "Would you like to resume encoding?" })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-4 rounded-lg border border-slate-100 bg-slate-50 p-3", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "grid grid-cols-2 gap-3 text-sm", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Total Items" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold text-slate-700", children: recoveryInfo.totalItems })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Completed" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold text-emerald-600", children: recoveryInfo.completedItems })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Failed" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: `font-semibold ${recoveryInfo.failedItems > 0 ? "text-rose-600" : "text-slate-700"}`, children: recoveryInfo.failedItems })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Remaining" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold text-slate-700", children: recoveryInfo.totalItems - recoveryInfo.completedItems - recoveryInfo.failedItems })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-2 text-xs text-slate-400", children: [
+          "Interrupted: ",
+          new Date(recoveryInfo.savedAt).toLocaleString()
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-5 flex gap-3", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            type: "button",
+            onClick: () => void handleDiscardRecovery(),
+            disabled: isRecovering,
+            className: "flex-1 rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50",
+            children: isRecovering ? "Processing..." : "Discard"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            type: "button",
+            onClick: () => void handleResumeRecovery(),
+            disabled: isRecovering,
+            className: "flex-1 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50",
+            children: isRecovering ? "Resuming..." : "Resume Encoding"
+          }
+        )
+      ] })
+    ] }) })
   ] });
 }
 const mapDownload = (item) => ({

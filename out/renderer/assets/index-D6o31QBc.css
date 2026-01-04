@@ -709,6 +709,11 @@ video {
   z-index: 50;
 }
 
+.mx-4{
+  margin-left: 1rem;
+  margin-right: 1rem;
+}
+
 .mx-auto{
   margin-left: auto;
   margin-right: auto;
@@ -1060,6 +1065,10 @@ video {
 
 .max-w-\[120px\]{
   max-width: 120px;
+}
+
+.max-w-md{
+  max-width: 28rem;
 }
 
 .max-w-sm{

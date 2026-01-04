@@ -6935,6 +6935,126 @@ async function findBinaryInDir(dir, binaryName) {
   }
   return null;
 }
+const STATE_FILE_NAME = "archival-queue-state.json";
+const CURRENT_VERSION = 1;
+class ArchivalStatePersistence {
+  // 30 seconds for periodic saves during encoding
+  constructor() {
+    this.logger = new Logger("ArchivalStatePersistence");
+    this.saveDebounceTimer = null;
+    this.saveDebounceMs = 3e4;
+    this.statePath = join(app.getPath("userData"), STATE_FILE_NAME);
+  }
+  /**
+   * Save state to disk immediately
+   */
+  async saveState(state) {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    try {
+      const stateWithMeta = {
+        ...state,
+        version: CURRENT_VERSION,
+        savedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await writeFile$1(this.statePath, JSON.stringify(stateWithMeta, null, 2), "utf-8");
+      this.logger.debug("State saved", { itemCount: state.job.items.length });
+    } catch (error2) {
+      this.logger.error("Failed to save state", { error: error2 });
+      throw error2;
+    }
+  }
+  /**
+   * Schedule a debounced save (used during encoding for periodic saves)
+   * The save will be executed after saveDebounceMs unless another save is triggered
+   */
+  scheduleSave(state) {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+    }
+    this.saveDebounceTimer = setTimeout(() => {
+      this.saveDebounceTimer = null;
+      void this.saveState(state);
+    }, this.saveDebounceMs);
+  }
+  /**
+   * Cancel any pending debounced save
+   */
+  cancelPendingSave() {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+  }
+  /**
+   * Load state from disk
+   * Returns null if no state file exists or if it's corrupted
+   */
+  async loadState() {
+    try {
+      const content = await readFile$1(this.statePath, "utf-8");
+      const state = JSON.parse(content);
+      if (state.version !== CURRENT_VERSION) {
+        this.logger.warn("State file version mismatch, discarding", {
+          fileVersion: state.version,
+          currentVersion: CURRENT_VERSION
+        });
+        await this.clearState();
+        return null;
+      }
+      if (!state.job || !state.job.id || !Array.isArray(state.job.items)) {
+        this.logger.warn("State file is corrupted, discarding");
+        await this.clearState();
+        return null;
+      }
+      this.logger.info("State loaded", {
+        jobId: state.job.id,
+        itemCount: state.job.items.length,
+        savedAt: state.savedAt
+      });
+      return state;
+    } catch (error2) {
+      if (error2.code === "ENOENT") {
+        return null;
+      }
+      this.logger.warn("Failed to load state", { error: error2 });
+      return null;
+    }
+  }
+  /**
+   * Clear state file from disk
+   */
+  async clearState() {
+    this.cancelPendingSave();
+    try {
+      await unlink(this.statePath);
+      this.logger.debug("State file cleared");
+    } catch (error2) {
+      if (error2.code !== "ENOENT") {
+        this.logger.warn("Failed to clear state", { error: error2 });
+      }
+    }
+  }
+  /**
+   * Check if a persisted state file exists
+   */
+  async hasPersistedState() {
+    try {
+      await access(this.statePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Get the path to the state file (for debugging/logging)
+   */
+  getStatePath() {
+    return this.statePath;
+  }
+}
 const execAsync = promisify(exec);
 class ArchivalService {
   constructor(onEvent) {
@@ -6942,10 +7062,13 @@ class ArchivalService {
     this.logger = new Logger("ArchivalService");
     this.metadata = new MetadataService();
     this.whisperService = new WhisperService();
+    this.persistence = new ArchivalStatePersistence();
     this.activeJob = null;
     this.activeProcess = null;
     this.abortController = null;
     this.fillModeSeenOutputs = null;
+    this.isPaused = false;
+    this.currentEncodingItemId = null;
     this.encodingStartTime = 0;
     this.speedSamples = [];
     this.maxSpeedSamples = 10;
@@ -7123,6 +7246,7 @@ class ArchivalService {
     if (this.activeJob && this.activeJob.status === "running") {
       throw new Error("Another archival job is already running");
     }
+    await this.persistence.clearState();
     if (!inputPaths || inputPaths.length === 0) {
       throw new Error("No input files provided");
     }
@@ -7222,7 +7346,204 @@ class ArchivalService {
       }
       this.activeProcess = null;
     }
+    void this.persistence.clearState();
     return true;
+  }
+  /**
+   * Pause the active batch job immediately
+   * Kills the current FFmpeg process and saves state for later resume
+   */
+  async pause() {
+    if (!this.activeJob || this.activeJob.status !== "running") {
+      return false;
+    }
+    this.logger.info("Pausing encoding job", { jobId: this.activeJob.id });
+    this.isPaused = true;
+    if (this.activeProcess) {
+      if (platform$1() === "win32") {
+        this.activeProcess.kill();
+      } else {
+        this.activeProcess.kill("SIGTERM");
+      }
+      this.activeProcess = null;
+    }
+    if (this.currentEncodingItemId) {
+      const currentItem = this.activeJob.items.find((i) => i.id === this.currentEncodingItemId);
+      if (currentItem && currentItem.status === "encoding") {
+        await this.cleanupPartialOutput(currentItem.outputPath);
+        currentItem.status = "queued";
+        currentItem.progress = 0;
+        currentItem.startedAt = void 0;
+        currentItem.encodingSpeed = void 0;
+        currentItem.etaSeconds = void 0;
+        currentItem.elapsedSeconds = void 0;
+      }
+    }
+    await this.saveCurrentState();
+    this.emitEvent({
+      batchId: this.activeJob.id,
+      itemId: "",
+      kind: "queue_paused",
+      queueState: "paused"
+    });
+    this.logger.info("Encoding job paused", { jobId: this.activeJob.id });
+    return true;
+  }
+  /**
+   * Resume a paused batch job
+   */
+  async resume() {
+    if (!this.activeJob || !this.isPaused) {
+      return false;
+    }
+    this.logger.info("Resuming encoding job", { jobId: this.activeJob.id });
+    this.isPaused = false;
+    const remainingInputPaths = this.activeJob.items.filter((i) => i.status === "queued").map((i) => i.inputPath);
+    if (remainingInputPaths.length > 0) {
+      const diskCheck = await this.checkDiskSpace(this.activeJob.config.outputDir, remainingInputPaths);
+      if (!diskCheck.ok) {
+        this.logger.error("Not enough disk space to resume", { diskCheck });
+        this.isPaused = true;
+        throw new Error("Not enough disk space to resume encoding");
+      }
+    }
+    this.emitEvent({
+      batchId: this.activeJob.id,
+      itemId: "",
+      kind: "queue_resumed",
+      queueState: "running"
+    });
+    void this.processQueue();
+    return true;
+  }
+  /**
+   * Check if a job is currently paused
+   */
+  getIsPaused() {
+    return this.isPaused;
+  }
+  /**
+   * Check if there's a recoverable state from a previous crash or exit
+   * Returns null if there's already an active job (nothing to recover)
+   */
+  async checkForRecovery() {
+    if (this.activeJob && (this.activeJob.status === "running" || this.isPaused)) {
+      return null;
+    }
+    try {
+      const state = await this.persistence.loadState();
+      if (state && state.job.status === "running") {
+        this.logger.info("Found recoverable job state", {
+          jobId: state.job.id,
+          totalItems: state.job.totalItems,
+          completedItems: state.job.completedItems,
+          savedAt: state.savedAt
+        });
+        return state;
+      }
+      return null;
+    } catch (error2) {
+      this.logger.warn("Failed to check for recovery state", { error: error2 });
+      return null;
+    }
+  }
+  /**
+   * Resume from a recovered state after crash/restart
+   * Validates files and restarts the queue
+   */
+  async resumeFromRecovery(state) {
+    if (this.activeJob && this.activeJob.status === "running") {
+      throw new Error("Another archival job is already running");
+    }
+    this.logger.info("Resuming from recovery state", { jobId: state.job.id });
+    this.activeJob = state.job;
+    for (const item of this.activeJob.items) {
+      if (item.status === "encoding" || item.status === "analyzing") {
+        await this.cleanupPartialOutput(item.outputPath);
+        item.status = "queued";
+        item.progress = 0;
+        item.startedAt = void 0;
+        item.encodingSpeed = void 0;
+        item.etaSeconds = void 0;
+        item.elapsedSeconds = void 0;
+      }
+      if (item.status === "queued") {
+        try {
+          await access(item.inputPath);
+        } catch {
+          item.status = "failed";
+          item.error = "Source file no longer exists";
+          item.errorType = "file_not_found";
+          item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+          this.activeJob.failedItems++;
+          this.logger.warn("Source file missing during recovery", { inputPath: item.inputPath });
+        }
+      }
+    }
+    if (state.twoPassState) {
+      try {
+        await rm(state.twoPassState.passLogDir, { recursive: true, force: true });
+        this.logger.debug("Cleaned up two-pass log files", { dir: state.twoPassState.passLogDir });
+      } catch {
+      }
+    }
+    this.speedSamples = [];
+    this.isPaused = false;
+    try {
+      await access(this.activeJob.config.outputDir);
+    } catch {
+      this.activeJob = null;
+      throw new Error("Output directory no longer exists or is not accessible");
+    }
+    const remainingInputPaths = this.activeJob.items.filter((i) => i.status === "queued").map((i) => i.inputPath);
+    if (remainingInputPaths.length > 0) {
+      const diskCheck = await this.checkDiskSpace(this.activeJob.config.outputDir, remainingInputPaths);
+      if (!diskCheck.ok) {
+        this.activeJob = null;
+        throw new Error("Not enough disk space to resume encoding");
+      }
+    }
+    void this.processQueue();
+    return this.activeJob;
+  }
+  /**
+   * Discard a recovered state and clean up
+   */
+  async discardRecovery(state) {
+    this.logger.info("Discarding recovery state", { jobId: state.job.id });
+    for (const item of state.job.items) {
+      if (item.status === "encoding" || item.status === "analyzing") {
+        await this.cleanupPartialOutput(item.outputPath);
+      }
+    }
+    if (state.twoPassState) {
+      try {
+        await rm(state.twoPassState.passLogDir, { recursive: true, force: true });
+      } catch {
+      }
+    }
+    await this.persistence.clearState();
+    this.logger.info("Recovery state discarded");
+  }
+  /**
+   * Check if there's an active job (running or paused)
+   */
+  hasActiveJob() {
+    return this.activeJob !== null && (this.activeJob.status === "running" || this.isPaused);
+  }
+  /**
+   * Save current state for graceful shutdown or crash recovery
+   */
+  async saveCurrentState() {
+    if (!this.activeJob) return;
+    const state = {
+      version: 1,
+      savedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      job: this.activeJob,
+      currentItemId: this.currentEncodingItemId
+    };
+    await this.persistence.saveState(state);
+    this.logger.debug("State saved", { jobId: this.activeJob.id });
   }
   /**
    * Preview the FFmpeg command for a single file
@@ -7294,13 +7615,25 @@ class ArchivalService {
   async processQueue() {
     if (!this.activeJob) return;
     this.activeJob.status = "running";
-    this.activeJob.startedAt = (/* @__PURE__ */ new Date()).toISOString();
+    if (!this.activeJob.startedAt) {
+      this.activeJob.startedAt = (/* @__PURE__ */ new Date()).toISOString();
+    }
     this.abortController = new AbortController();
     for (const item of this.activeJob.items) {
+      if (item.status === "completed" || item.status === "failed" || item.status === "skipped") {
+        continue;
+      }
+      if (this.isPaused) {
+        this.logger.info("Queue paused, stopping processing");
+        this.abortController = null;
+        return;
+      }
       if (this.abortController.signal.aborted) {
         item.status = "cancelled";
         continue;
       }
+      this.currentEncodingItemId = item.id;
+      await this.saveCurrentState();
       try {
         await this.processItem(item);
       } catch (error2) {
@@ -7309,7 +7642,9 @@ class ArchivalService {
           error: error2 instanceof Error ? error2.message : "Unknown error"
         });
       }
+      await this.saveCurrentState();
     }
+    this.currentEncodingItemId = null;
     const finalStatus = this.abortController.signal.aborted ? "cancelled" : "completed";
     this.activeJob.status = finalStatus;
     this.activeJob.completedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -7321,8 +7656,10 @@ class ArchivalService {
       processedItems: this.activeJob.completedItems,
       totalItems: this.activeJob.totalItems
     });
+    await this.persistence.clearState();
     this.abortController = null;
     this.fillModeSeenOutputs = null;
+    this.isPaused = false;
   }
   /**
    * Process a single item in the batch
@@ -8443,6 +8780,9 @@ async function findVideoFilesRecursively(rootPath, basePath = rootPath) {
   return files;
 }
 let archivalService = null;
+function getArchivalService() {
+  return archivalService;
+}
 function getMainWindow() {
   const windows = BrowserWindow.getAllWindows();
   return windows.length > 0 ? windows[0] : null;
@@ -8603,6 +8943,89 @@ function registerArchivalHandlers() {
     const service = getService();
     const canceled = service.cancel();
     return { ok: true, canceled };
+  });
+  ipcMain.handle("archival/pause", async () => {
+    try {
+      const service = getService();
+      const paused = await service.pause();
+      return { ok: true, paused };
+    } catch (error2) {
+      return {
+        ok: false,
+        paused: false,
+        error: error2 instanceof Error ? error2.message : "Failed to pause"
+      };
+    }
+  });
+  ipcMain.handle("archival/resume", async () => {
+    try {
+      const service = getService();
+      const resumed = await service.resume();
+      return { ok: true, resumed };
+    } catch (error2) {
+      return {
+        ok: false,
+        resumed: false,
+        error: error2 instanceof Error ? error2.message : "Failed to resume"
+      };
+    }
+  });
+  ipcMain.handle("archival/check-recovery", async () => {
+    try {
+      const service = getService();
+      const state = await service.checkForRecovery();
+      if (state) {
+        return {
+          ok: true,
+          hasRecovery: true,
+          recoveryInfo: {
+            jobId: state.job.id,
+            totalItems: state.job.totalItems,
+            completedItems: state.job.completedItems,
+            failedItems: state.job.failedItems,
+            savedAt: state.savedAt
+          }
+        };
+      }
+      return { ok: true, hasRecovery: false };
+    } catch (error2) {
+      return { ok: false, hasRecovery: false };
+    }
+  });
+  ipcMain.handle("archival/resume-recovery", async () => {
+    try {
+      const service = getService();
+      const state = await service.checkForRecovery();
+      if (!state) {
+        return { ok: false, error: "No recovery state found" };
+      }
+      const job = await service.resumeFromRecovery(state);
+      return { ok: true, job };
+    } catch (error2) {
+      return {
+        ok: false,
+        error: error2 instanceof Error ? error2.message : "Failed to resume from recovery"
+      };
+    }
+  });
+  ipcMain.handle("archival/discard-recovery", async () => {
+    try {
+      const service = getService();
+      const state = await service.checkForRecovery();
+      if (state) {
+        await service.discardRecovery(state);
+      }
+      return { ok: true };
+    } catch (error2) {
+      return {
+        ok: false,
+        error: error2 instanceof Error ? error2.message : "Failed to discard recovery"
+      };
+    }
+  });
+  ipcMain.handle("archival/get-pause-state", async () => {
+    const service = getService();
+    return { ok: true, isPaused: service.getIsPaused() };
   });
   ipcMain.handle(
     "archival/preview-command",
@@ -24287,6 +24710,7 @@ NsisUpdater$1.NsisUpdater = NsisUpdater;
 const __dirname$1 = dirname(fileURLToPath(import.meta.url));
 let mainWindow = null;
 let downloadWorker = null;
+let isShuttingDown = false;
 let transcodeWorker = null;
 let transcriptionWorker = null;
 let smartTagging = null;
@@ -24540,11 +24964,24 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
-app.on("before-quit", () => {
+app.on("before-quit", async (event) => {
   downloadWorker?.stop();
   transcodeWorker?.stop();
   transcriptionWorker?.stop();
   void watchFolderService?.stop();
+  const archivalService2 = getArchivalService();
+  if (!isShuttingDown && archivalService2?.hasActiveJob()) {
+    isShuttingDown = true;
+    appLogger.info("Saving archival state before quit");
+    event.preventDefault();
+    try {
+      await archivalService2.pause();
+      appLogger.info("Archival state saved, quitting");
+    } catch (error2) {
+      appLogger.error("Failed to save archival state", { error: error2 });
+    }
+    app.quit();
+  }
 });
 export {
   commonjsGlobal as c,
