@@ -8444,6 +8444,7 @@ function Archive() {
       }
       if (result.job) {
         setCurrentJob(result.job);
+        setQueueState("running");
         setInputPaths([]);
         setSourceInfo(null);
         setFolderPath(null);
