@@ -1041,6 +1041,21 @@ export class ArchivalService {
       item.progress = 100
       this.activeJob.completedItems++
 
+      // Delete original file if enabled (DANGEROUS - only after successful encoding)
+      if (this.activeJob.config.deleteOriginal) {
+        try {
+          await unlink(item.inputPath)
+          item.originalDeleted = true
+          this.logger.info('Deleted original file', { inputPath: item.inputPath })
+        } catch (deleteError) {
+          // Log but don't fail the item if deletion fails
+          this.logger.warn('Failed to delete original file', {
+            inputPath: item.inputPath,
+            error: deleteError instanceof Error ? deleteError.message : 'Unknown error'
+          })
+        }
+      }
+
       // Warn if output is larger but we kept it
       const warningMsg = outputLarger
         ? ` (WARNING: output larger than input)`
@@ -1062,7 +1077,8 @@ export class ArchivalService {
         input: basename(item.inputPath),
         output: basename(item.outputPath),
         ratio: item.compressionRatio?.toFixed(2),
-        outputLarger
+        outputLarger,
+        originalDeleted: item.originalDeleted
       })
 
     } catch (error) {

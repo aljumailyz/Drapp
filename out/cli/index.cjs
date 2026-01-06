@@ -5768,6 +5768,18 @@ var ArchivalService = class {
       item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
       item.progress = 100;
       this.activeJob.completedItems++;
+      if (this.activeJob.config.deleteOriginal) {
+        try {
+          await (0, import_promises2.unlink)(item.inputPath);
+          item.originalDeleted = true;
+          this.logger.info("Deleted original file", { inputPath: item.inputPath });
+        } catch (deleteError) {
+          this.logger.warn("Failed to delete original file", {
+            inputPath: item.inputPath,
+            error: deleteError instanceof Error ? deleteError.message : "Unknown error"
+          });
+        }
+      }
       const warningMsg = outputLarger ? ` (WARNING: output larger than input)` : "";
       this.emitEvent({
         batchId: this.activeJob.id,
@@ -5784,7 +5796,8 @@ var ArchivalService = class {
         input: (0, import_node_path4.basename)(item.inputPath),
         output: (0, import_node_path4.basename)(item.outputPath),
         ratio: item.compressionRatio?.toFixed(2),
-        outputLarger
+        outputLarger,
+        originalDeleted: item.originalDeleted
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
