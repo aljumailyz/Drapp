@@ -303,9 +303,9 @@ export const archiveCommand = new Command('archive')
         (options as any)._wizardRelativePaths = wizardResult.relativePaths
       }
 
-      // If multiple files were selected, use them directly
-      if (wizardResult.inputPaths.length > 1) {
-        // We'll handle this case below
+      // If files were selected (even just 1), use them directly
+      // This handles both multi-select and folder selection with any number of videos
+      if (wizardResult.inputPaths.length >= 1) {
         (options as any)._wizardInputPaths = wizardResult.inputPaths
       }
     }

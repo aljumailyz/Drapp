@@ -132,10 +132,6 @@ function countVideos(entries: FileEntry[]): number {
   return entries.filter(e => e.isVideo).length
 }
 
-function countSelectedVideos(entries: FileEntry[], selected: Set<string>): number {
-  return entries.filter(e => e.isVideo && selected.has(e.path)).length
-}
-
 function renderBrowser(state: BrowserState, height: number): void {
   const width = Math.min(process.stdout.columns || 80, 100)
   state.listHeight = height - 10 // Reserve space for header and footer
@@ -225,9 +221,9 @@ function renderBrowser(state: BrowserState, height: number): void {
   // Controls - show different controls based on mode
   let controls: string
   if (state.mode === 'select-input') {
-    controls = '↑↓/jk Navigate │ Space Select │ a All │ d Clear │ Enter Confirm │ Mouse Click │ q Cancel'
+    controls = '↑↓ Navigate │ Space Toggle │ a All │ Enter Select Folder/Confirm │ q Cancel'
   } else {
-    controls = '↑↓/jk Navigate │ Enter Select │ n New Folder │ g Home │ q Cancel'
+    controls = '↑↓ Navigate │ Enter Select Folder │ n New │ g Home │ q Cancel'
   }
 
   const controlsDisplay = controls.length > width - 4
@@ -311,17 +307,6 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
       process.stdin.pause()
     }
 
-    const selectRange = (from: number, to: number) => {
-      const start = Math.min(from, to)
-      const end = Math.max(from, to)
-      for (let i = start; i <= end; i++) {
-        const entry = state.entries[i]
-        if (entry && entry.name !== '..' && (entry.isVideo || entry.isDirectory)) {
-          state.selectedFiles.add(entry.path)
-        }
-      }
-    }
-
     const onKeypress = async (key: Buffer) => {
       const keyStr = key.toString()
       const listHeight = state.listHeight
@@ -341,14 +326,20 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
 
             if (button === 0) {
               // Left click
-              if (entry.isDirectory) {
+              if (entry.isDirectory && entry.name !== '..') {
                 // Navigate into directory
                 state.currentPath = entry.path
                 state.entries = await getEntries(entry.path)
                 state.selectedIndex = 0
                 state.scrollOffset = 0
-              } else if (mode === 'select-input' && entry.name !== '..') {
-                // Toggle selection
+              } else if (entry.isDirectory && entry.name === '..') {
+                // Go to parent
+                state.currentPath = entry.path
+                state.entries = await getEntries(entry.path)
+                state.selectedIndex = 0
+                state.scrollOffset = 0
+              } else if (mode === 'select-input' && entry.isVideo) {
+                // Toggle selection - only allow selecting video files
                 state.selectedIndex = clickedIndex
                 if (state.selectedFiles.has(entry.path)) {
                   state.selectedFiles.delete(entry.path)
@@ -356,9 +347,12 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
                   state.selectedFiles.add(entry.path)
                   state.lastSelectedIndex = clickedIndex
                 }
+              } else if (mode === 'select-input' && !entry.isVideo && !entry.isDirectory) {
+                // Clicked on non-video file - just move cursor, don't select
+                state.selectedIndex = clickedIndex
               }
             } else if (button === 64) {
-              // Scroll up
+              // Scroll up (mouse wheel)
               if (state.scrollOffset > 0) {
                 state.scrollOffset--
                 if (state.selectedIndex > state.scrollOffset + listHeight - 1) {
@@ -366,8 +360,9 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
                 }
               }
             } else if (button === 65) {
-              // Scroll down
-              if (state.scrollOffset < state.entries.length - listHeight) {
+              // Scroll down (mouse wheel)
+              const maxScroll = Math.max(0, state.entries.length - listHeight)
+              if (state.scrollOffset < maxScroll) {
                 state.scrollOffset++
                 if (state.selectedIndex < state.scrollOffset) {
                   state.selectedIndex = state.scrollOffset
@@ -413,7 +408,9 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
         // Page Down
         state.selectedIndex = Math.min(state.entries.length - 1, state.selectedIndex + listHeight)
         if (state.selectedIndex >= state.scrollOffset + listHeight) {
-          state.scrollOffset = Math.min(state.entries.length - listHeight, state.scrollOffset + listHeight)
+          // Ensure scrollOffset doesn't go negative when entries < listHeight
+          const maxScroll = Math.max(0, state.entries.length - listHeight)
+          state.scrollOffset = Math.min(maxScroll, state.scrollOffset + listHeight)
         }
       } else if (keyStr === '\x1b[H' || keyStr === '\x1b[1~') {
         // Home
@@ -424,22 +421,27 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
         state.selectedIndex = state.entries.length - 1
         state.scrollOffset = Math.max(0, state.entries.length - listHeight)
       } else if (keyStr === ' ' && mode === 'select-input') {
-        // Space - toggle selection
+        // Space - toggle selection (only for video files)
         const entry = state.entries[state.selectedIndex]
-        if (entry && entry.name !== '..') {
+        if (entry && entry.isVideo) {
           if (state.selectedFiles.has(entry.path)) {
             state.selectedFiles.delete(entry.path)
           } else {
             state.selectedFiles.add(entry.path)
             state.lastSelectedIndex = state.selectedIndex
           }
-        }
-        // Move to next item after selection
-        if (state.selectedIndex < state.entries.length - 1) {
-          state.selectedIndex++
-          if (state.selectedIndex >= state.scrollOffset + listHeight) {
-            state.scrollOffset = state.selectedIndex - listHeight + 1
+          // Move to next item after selection
+          if (state.selectedIndex < state.entries.length - 1) {
+            state.selectedIndex++
+            if (state.selectedIndex >= state.scrollOffset + listHeight) {
+              state.scrollOffset = state.selectedIndex - listHeight + 1
+            }
           }
+        } else if (entry && entry.isDirectory && entry.name !== '..') {
+          // Space on directory - select the folder (same as Enter)
+          cleanup()
+          resolve({ cancelled: false, paths: [entry.path] })
+          return
         }
       } else if ((keyStr === 'a' || keyStr === 'A') && mode === 'select-input') {
         // Select/deselect all videos in current directory
@@ -498,30 +500,41 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
         // Enter
         const entry = state.entries[state.selectedIndex]
 
-        if (entry?.isDirectory) {
-          // Navigate into directory
-          state.currentPath = entry.path
-          state.entries = await getEntries(entry.path)
-          state.selectedIndex = 0
-          state.scrollOffset = 0
-        } else if (mode === 'select-input') {
+        if (mode === 'select-input') {
           // Confirm selection
           if (state.selectedFiles.size > 0) {
+            // Return selected files
             cleanup()
             resolve({ cancelled: false, paths: Array.from(state.selectedFiles) })
             return
+          } else if (entry?.isDirectory && entry.name !== '..') {
+            // Select this folder (return it so wizard can scan for videos)
+            cleanup()
+            resolve({ cancelled: false, paths: [entry.path] })
+            return
+          } else if (entry?.isDirectory && entry.name === '..') {
+            // Navigate to parent
+            state.currentPath = entry.path
+            state.entries = await getEntries(entry.path)
+            state.selectedIndex = 0
+            state.scrollOffset = 0
           } else if (entry && !entry.isDirectory) {
             // Select current file if nothing selected
             cleanup()
             resolve({ cancelled: false, paths: [entry.path] })
             return
           } else {
-            state.message = `${style.yellow}Select at least one file (Space to select, a for all videos)${style.reset}`
-            setTimeout(() => {
-              state.message = undefined
-              renderBrowser(state, height)
-            }, 2000)
+            // No entry selected - use current directory
+            cleanup()
+            resolve({ cancelled: false, paths: [state.currentPath] })
+            return
           }
+        } else if (entry?.isDirectory) {
+          // Navigate into directory (for output mode or when not selecting)
+          state.currentPath = entry.path
+          state.entries = await getEntries(entry.path)
+          state.selectedIndex = 0
+          state.scrollOffset = 0
         }
 
         if (mode === 'select-output') {

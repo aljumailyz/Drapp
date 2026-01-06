@@ -152,7 +152,49 @@ ${style.cyan}╰─────────────────────�
     if (result.cancelled) {
       return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
     }
-    inputPaths = result.paths
+
+    // Check if a folder was selected (user pressed Enter on a folder)
+    if (result.paths.length === 1) {
+      try {
+        const pathStat = await stat(result.paths[0])
+        if (pathStat.isDirectory()) {
+          // Scan the folder for videos
+          clearScreen()
+          printSection('Step 1: Select Videos')
+          console.log(`${style.dim}Scanning folder for videos...${style.reset}\n`)
+
+          const files = await findVideoFilesRecursive(result.paths[0])
+
+          if (files.length === 0) {
+            console.log(`${style.yellow}No video files found in ${result.paths[0]}${style.reset}`)
+            const tryAgain = await confirm('Try again?')
+            if (tryAgain) {
+              return runWizard()
+            }
+            return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
+          }
+
+          inputPaths = files.map(f => f.absolutePath)
+          relativePaths = files.map(f => f.relativePath)
+          folderRoot = result.paths[0]
+
+          // Check if there are subfolders
+          const hasSubfolders = files.some(f => f.relativePath.includes('/') || f.relativePath.includes('\\'))
+
+          console.log(`Found ${style.cyan}${files.length}${style.reset} videos`)
+          if (hasSubfolders) {
+            console.log(`${style.dim}Including files in subfolders${style.reset}\n`)
+            preserveStructure = await confirm('Preserve folder structure in output? (recommended for organized libraries)')
+          }
+        } else {
+          inputPaths = result.paths
+        }
+      } catch {
+        inputPaths = result.paths
+      }
+    } else {
+      inputPaths = result.paths
+    }
   } else if (inputMethod === 'folder') {
     const result = await browseForOutput() // Use output browser for folder selection
     if (result.cancelled) {
