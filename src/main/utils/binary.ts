@@ -1,9 +1,88 @@
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { app } from 'electron'
 
 export type BinaryName = 'yt-dlp' | 'ffmpeg' | 'ffprobe' | 'whisper' | 'faster-whisper'
+
+// Get current directory - works in both ESM and CJS
+function getCurrentDir(): string {
+  // Try CJS __dirname first (available when bundled as CJS)
+  if (typeof __dirname !== 'undefined') {
+    return __dirname
+  }
+  // Fall back to ESM import.meta.url
+  try {
+    const { fileURLToPath } = require('node:url')
+    return dirname(fileURLToPath(import.meta.url))
+  } catch {
+    return process.cwd()
+  }
+}
+
+// Check if running in Electron context
+function isElectron(): boolean {
+  // Check for CLI_MODE environment variable set by build
+  if (process.env.CLI_MODE === 'true') return false
+  return typeof process !== 'undefined' &&
+    process.versions != null &&
+    process.versions.electron != null
+}
+
+// Get Electron app if available
+async function getElectronAppAsync(): Promise<{ isPackaged: boolean; getAppPath: () => string } | null> {
+  if (!isElectron()) return null
+  try {
+    // Dynamic import to avoid bundling issues in CLI mode
+    const electron = await import('electron')
+    return electron.app
+  } catch {
+    return null
+  }
+}
+
+// Synchronous version for compatibility - returns cached value or null
+let cachedApp: { isPackaged: boolean; getAppPath: () => string } | null | undefined = undefined
+
+function getElectronApp(): { isPackaged: boolean; getAppPath: () => string } | null {
+  if (cachedApp !== undefined) return cachedApp
+  if (!isElectron()) {
+    cachedApp = null
+    return null
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { app } = require('electron')
+    cachedApp = app
+    return app
+  } catch {
+    cachedApp = null
+    return null
+  }
+}
+
+/**
+ * Get resources path - works in both Electron and CLI mode
+ */
+function getResourcesPath(): string {
+  const app = getElectronApp()
+
+  if (app) {
+    // Electron mode
+    return app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
+  }
+
+  // CLI mode - find resources relative to current file or cwd
+  const possiblePaths = [
+    join(process.cwd(), 'resources'),
+    join(getCurrentDir(), '..', '..', '..', 'resources')
+  ]
+
+  for (const p of possiblePaths) {
+    if (existsSync(p)) return p
+  }
+
+  return join(process.cwd(), 'resources')
+}
 
 /**
  * Whisper backend types
@@ -67,7 +146,7 @@ function findInSystemPath(name: string): string | null {
  * On Linux, falls back to system PATH if bundled binary doesn't exist
  */
 export function resolveBundledBinary(name: BinaryName): string {
-  const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
+  const resourcesPath = getResourcesPath()
   const binaryName = process.platform === 'win32' ? `${name}.exe` : name
   const bundledPath = join(resourcesPath, 'bin', platformDir(), binaryName)
 
@@ -91,7 +170,7 @@ export function resolveBundledBinary(name: BinaryName): string {
 }
 
 export function getBundledBinaryDir(): string {
-  const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
+  const resourcesPath = getResourcesPath()
   return join(resourcesPath, 'bin', platformDir())
 }
 

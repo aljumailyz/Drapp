@@ -1,5 +1,5 @@
 import require$$1$4, { app, ipcMain, BrowserWindow, dialog, shell, safeStorage, clipboard, protocol, net } from "electron";
-import { join, basename, extname, dirname, parse as parse$7, relative } from "node:path";
+import { join, dirname, basename, extname, parse as parse$7, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdir as mkdir$4, writeFile as writeFile$1, unlink, stat as stat$5, readdir, readFile as readFile$1, open, rm, access, chmod, rename as rename$2, appendFile, watch, constants as constants$4, copyFile as copyFile$2 } from "node:fs/promises";
 import { existsSync, statSync, mkdirSync, accessSync, constants as constants$3, createWriteStream, readFileSync as readFileSync$1, watch as watch$1 } from "node:fs";
@@ -392,6 +392,51 @@ class QueueManager {
     this.logger.info("job enqueued", { id: job.id, type: job.type });
   }
 }
+function getCurrentDir() {
+  if (typeof __dirname !== "undefined") {
+    return __dirname;
+  }
+  try {
+    const { fileURLToPath: fileURLToPath2 } = require2("node:url");
+    return dirname(fileURLToPath2(import.meta.url));
+  } catch {
+    return process.cwd();
+  }
+}
+function isElectron() {
+  if (process.env.CLI_MODE === "true") return false;
+  return typeof process !== "undefined" && process.versions != null && process.versions.electron != null;
+}
+let cachedApp = void 0;
+function getElectronApp() {
+  if (cachedApp !== void 0) return cachedApp;
+  if (!isElectron()) {
+    cachedApp = null;
+    return null;
+  }
+  try {
+    const { app: app2 } = require2("electron");
+    cachedApp = app2;
+    return app2;
+  } catch {
+    cachedApp = null;
+    return null;
+  }
+}
+function getResourcesPath() {
+  const app2 = getElectronApp();
+  if (app2) {
+    return app2.isPackaged ? process.resourcesPath : join(app2.getAppPath(), "resources");
+  }
+  const possiblePaths = [
+    join(process.cwd(), "resources"),
+    join(getCurrentDir(), "..", "..", "..", "resources")
+  ];
+  for (const p of possiblePaths) {
+    if (existsSync(p)) return p;
+  }
+  return join(process.cwd(), "resources");
+}
 function platformDir() {
   if (process.platform === "darwin") {
     return "darwin";
@@ -429,7 +474,7 @@ function findInSystemPath(name) {
   return null;
 }
 function resolveBundledBinary(name) {
-  const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
+  const resourcesPath = getResourcesPath();
   const binaryName = process.platform === "win32" ? `${name}.exe` : name;
   const bundledPath = join(resourcesPath, "bin", platformDir(), binaryName);
   if (existsSync(bundledPath)) {
@@ -444,7 +489,7 @@ function resolveBundledBinary(name) {
   return bundledPath;
 }
 function getBundledBinaryDir() {
-  const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
+  const resourcesPath = getResourcesPath();
   return join(resourcesPath, "bin", platformDir());
 }
 function isBinaryAvailable(name) {

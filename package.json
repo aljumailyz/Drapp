@@ -4,17 +4,23 @@
   "description": "Video download, management, and AI processing desktop app",
   "type": "module",
   "main": "out/main/index.js",
+  "bin": {
+    "drapp": "./out/cli/index.cjs"
+  },
   "author": "",
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:cli": "node scripts/build-cli.mjs",
+    "cli": "node out/cli/index.cjs",
     "preview": "electron-vite preview",
     "dist": "electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",
+    "commander": "^12.0.0",
     "date-fns": "^3.0.0",
     "electron-updater": "^6.1.8",
     "react": "^18.2.0",
@@ -30,6 +36,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.10.0",
+    "esbuild": "^0.20.0",
     "@types/react": "^18.2.37",
     "@types/react-dom": "^18.2.15",
     "@types/uuid": "^9.0.0",
