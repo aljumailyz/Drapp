@@ -3098,7 +3098,7 @@ var {
 // src/cli/index.ts
 var import_node_fs4 = require("node:fs");
 var import_node_path8 = require("node:path");
-var import_node_os4 = require("node:os");
+var import_node_os5 = require("node:os");
 
 // src/cli/commands/archive.ts
 var import_promises5 = require("node:fs/promises");
@@ -4631,16 +4631,27 @@ function getEncoderList(ffmpegPath) {
 // src/main/services/archival/archival-state-persistence.ts
 var import_promises = require("node:fs/promises");
 var import_node_path3 = require("node:path");
-init_electron();
+var import_node_os = require("node:os");
 var STATE_FILE_NAME = "archival-queue-state.json";
 var CURRENT_VERSION = 1;
+function getUserDataPath() {
+  try {
+    const { app: app2 } = (init_electron(), __toCommonJS(electron_exports));
+    if (app2 && typeof app2.getPath === "function") {
+      return app2.getPath("userData");
+    }
+  } catch {
+  }
+  return (0, import_node_path3.join)((0, import_node_os.homedir)(), ".drapp");
+}
 var ArchivalStatePersistence = class {
   // 30 seconds for periodic saves during encoding
   constructor() {
     this.logger = new Logger("ArchivalStatePersistence");
     this.saveDebounceTimer = null;
     this.saveDebounceMs = 3e4;
-    this.statePath = (0, import_node_path3.join)(app.getPath("userData"), STATE_FILE_NAME);
+    const userDataPath = getUserDataPath();
+    this.statePath = (0, import_node_path3.join)(userDataPath, STATE_FILE_NAME);
   }
   /**
    * Save state to disk immediately
@@ -4651,6 +4662,8 @@ var ArchivalStatePersistence = class {
       this.saveDebounceTimer = null;
     }
     try {
+      const { dirname: dirname6 } = await import("node:path");
+      await (0, import_promises.mkdir)(dirname6(this.statePath), { recursive: true });
       const stateWithMeta = {
         ...state,
         version: CURRENT_VERSION,
@@ -4756,10 +4769,10 @@ var ArchivalStatePersistence = class {
 // src/main/services/hw-accel-detector.ts
 var import_node_child_process5 = require("node:child_process");
 var import_node_util = require("node:util");
-var import_node_os = __toESM(require("node:os"), 1);
+var import_node_os2 = __toESM(require("node:os"), 1);
 var execFileAsync = (0, import_node_util.promisify)(import_node_child_process5.execFile);
 async function detectCPUSIMDCapabilities() {
-  const platform2 = import_node_os.default.platform();
+  const platform2 = import_node_os2.default.platform();
   const capabilities = {
     // x86
     sse: false,
@@ -4868,7 +4881,7 @@ async function detectWindowsCPUCapabilities(capabilities) {
   } catch {
     console.warn("PowerShell CPU detection failed, using baseline assumptions");
   }
-  const arch = import_node_os.default.arch();
+  const arch = import_node_os2.default.arch();
   if (arch === "arm64") {
     capabilities.architecture = "arm64";
     capabilities.neon = true;
@@ -4897,7 +4910,7 @@ async function detectLinuxCPUCapabilities(capabilities) {
   const { stdout } = await execFileAsync("cat", ["/proc/cpuinfo"], {
     timeout: 5e3
   });
-  const arch = import_node_os.default.arch();
+  const arch = import_node_os2.default.arch();
   const isARM = arch === "arm64" || arch === "aarch64";
   if (isARM) {
     capabilities.architecture = "arm64";
@@ -5016,7 +5029,7 @@ async function detectMacOSCPUCapabilities(capabilities) {
 }
 
 // src/main/services/archival/archival.service.ts
-var import_node_os2 = require("node:os");
+var import_node_os3 = require("node:os");
 var import_node_child_process7 = require("node:child_process");
 var import_node_util2 = require("node:util");
 var execAsync = (0, import_node_util2.promisify)(import_node_child_process7.exec);
@@ -5143,7 +5156,7 @@ var ArchivalService = class {
    * Uses platform-specific commands
    */
   async getFreeDiskSpace(dirPath) {
-    const os2 = (0, import_node_os2.platform)();
+    const os2 = (0, import_node_os3.platform)();
     if (os2 === "win32") {
       const driveMatch = dirPath.match(/^([A-Za-z]):/);
       const isUncPath = dirPath.startsWith("\\\\");
@@ -5310,7 +5323,7 @@ var ArchivalService = class {
     this.abortController?.abort();
     this.activeJob.status = "cancelled";
     if (this.activeProcess) {
-      if ((0, import_node_os2.platform)() === "win32") {
+      if ((0, import_node_os3.platform)() === "win32") {
         this.activeProcess.kill();
       } else {
         this.activeProcess.kill("SIGTERM");
@@ -5331,7 +5344,7 @@ var ArchivalService = class {
     this.logger.info("Pausing encoding job", { jobId: this.activeJob.id });
     this.isPaused = true;
     if (this.activeProcess) {
-      if ((0, import_node_os2.platform)() === "win32") {
+      if ((0, import_node_os3.platform)() === "win32") {
         this.activeProcess.kill();
       } else {
         this.activeProcess.kill("SIGTERM");
@@ -6121,7 +6134,7 @@ var ArchivalService = class {
         reject(typedError);
       });
       const abortHandler = () => {
-        if ((0, import_node_os2.platform)() === "win32") {
+        if ((0, import_node_os3.platform)() === "win32") {
           proc.kill();
         } else {
           proc.kill("SIGTERM");
@@ -6323,7 +6336,7 @@ var ArchivalService = class {
         reject(typedError);
       });
       const abortHandler = () => {
-        if ((0, import_node_os2.platform)() === "win32") {
+        if ((0, import_node_os3.platform)() === "win32") {
           proc.kill();
         } else {
           proc.kill("SIGTERM");
@@ -6376,7 +6389,7 @@ var ArchivalService = class {
   }
   normalizeOutputPath(filePath) {
     const normalized = filePath.replace(/\\/g, "/");
-    return (0, import_node_os2.platform)() === "win32" ? normalized.toLowerCase() : normalized;
+    return (0, import_node_os3.platform)() === "win32" ? normalized.toLowerCase() : normalized;
   }
   /**
    * Clean up partial output file on error/cancel
@@ -7001,7 +7014,7 @@ ${style.green}\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 // src/cli/ui/browser.ts
 var import_promises3 = require("node:fs/promises");
 var import_node_path5 = require("node:path");
-var import_node_os3 = require("node:os");
+var import_node_os4 = require("node:os");
 var import_node_readline = require("node:readline");
 var VIDEO_EXTENSIONS = /* @__PURE__ */ new Set([
   ".mp4",
@@ -7163,10 +7176,10 @@ ${state.message}`);
   }
 }
 async function browseForInput(startPath) {
-  return browse(startPath || (0, import_node_os3.homedir)(), "select-input");
+  return browse(startPath || (0, import_node_os4.homedir)(), "select-input");
 }
 async function browseForOutput(startPath) {
-  return browse(startPath || (0, import_node_os3.homedir)(), "select-output");
+  return browse(startPath || (0, import_node_os4.homedir)(), "select-output");
 }
 function parseMouseEvent(data) {
   const sgrMatch = data.match(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
@@ -7425,7 +7438,7 @@ async function browse(startPath, mode) {
         });
         return;
       } else if (keyStr === "g" || keyStr === "~") {
-        state.currentPath = (0, import_node_os3.homedir)();
+        state.currentPath = (0, import_node_os4.homedir)();
         state.entries = await getEntries(state.currentPath);
         state.selectedIndex = 0;
         state.scrollOffset = 0;
@@ -8553,7 +8566,7 @@ ${style.dim}${stack}${style.reset}`);
 });
 
 // src/cli/index.ts
-var CONFIG_DIR = (0, import_node_path8.join)((0, import_node_os4.homedir)(), ".drapp");
+var CONFIG_DIR = (0, import_node_path8.join)((0, import_node_os5.homedir)(), ".drapp");
 var CONFIG_FILE = (0, import_node_path8.join)(CONFIG_DIR, "cli-config.json");
 function loadConfig() {
   try {

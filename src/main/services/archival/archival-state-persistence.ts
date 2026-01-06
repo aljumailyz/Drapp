@@ -1,11 +1,31 @@
-import { readFile, writeFile, unlink, access } from 'node:fs/promises'
+import { readFile, writeFile, unlink, access, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app } from 'electron'
+import { homedir } from 'node:os'
 import { Logger } from '../../utils/logger'
 import type { PersistedArchivalState } from '../../../shared/types/archival.types'
 
 const STATE_FILE_NAME = 'archival-queue-state.json'
 const CURRENT_VERSION = 1
+
+/**
+ * Get user data directory - works in both Electron and CLI mode
+ */
+function getUserDataPath(): string {
+  // Check if running in Electron
+  try {
+    // Dynamic require to avoid bundling issues in CLI mode
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { app } = require('electron')
+    if (app && typeof app.getPath === 'function') {
+      return app.getPath('userData')
+    }
+  } catch {
+    // Not in Electron context
+  }
+
+  // CLI mode - use ~/.drapp
+  return join(homedir(), '.drapp')
+}
 
 /**
  * Handles persistence of archival queue state for crash recovery
@@ -18,7 +38,8 @@ export class ArchivalStatePersistence {
   private readonly saveDebounceMs = 30000 // 30 seconds for periodic saves during encoding
 
   constructor() {
-    this.statePath = join(app.getPath('userData'), STATE_FILE_NAME)
+    const userDataPath = getUserDataPath()
+    this.statePath = join(userDataPath, STATE_FILE_NAME)
   }
 
   /**
@@ -32,6 +53,10 @@ export class ArchivalStatePersistence {
     }
 
     try {
+      // Ensure parent directory exists (important for CLI mode)
+      const { dirname } = await import('node:path')
+      await mkdir(dirname(this.statePath), { recursive: true })
+
       const stateWithMeta: PersistedArchivalState = {
         ...state,
         version: CURRENT_VERSION,
