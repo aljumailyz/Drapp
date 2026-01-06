@@ -7861,7 +7861,7 @@ ${style.green}\u2713${style.reset} Selected ${inputPaths.length} item(s)`);
     }
     outputPath = path;
   } else {
-    outputPath = inputPaths[0];
+    outputPath = folderRoot || (0, import_node_path6.dirname)(inputPaths[0]);
   }
   clearScreen();
   console.log(`

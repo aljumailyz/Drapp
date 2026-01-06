@@ -374,8 +374,8 @@ ${style.cyan}╰─────────────────────�
     }
     outputPath = path
   } else {
-    // Same as input - use the directory of the first input
-    outputPath = inputPaths[0]
+    // Same as input - use the folder root or directory of the first input
+    outputPath = folderRoot || dirname(inputPaths[0])
   }
 
   clearScreen()
