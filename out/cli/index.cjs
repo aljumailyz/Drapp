@@ -8533,11 +8533,20 @@ ${style.yellow}Encoding cancelled${style.reset}`);
       tui.stop();
     }
     const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : void 0;
     if (useTUI) {
-      printError(message.slice(0, 40));
+      printError(message);
+      if (stack) {
+        console.error(`
+${style.dim}${stack}${style.reset}`);
+      }
     } else {
       console.error(`
 ${style.red}Error:${style.reset}`, message);
+      if (stack) {
+        console.error(`
+${style.dim}${stack}${style.reset}`);
+      }
     }
     process.exit(1);
   }

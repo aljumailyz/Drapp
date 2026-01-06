@@ -581,10 +581,18 @@ export const archiveCommand = new Command('archive')
       }
 
       const message = error instanceof Error ? error.message : String(error)
+      const stack = error instanceof Error ? error.stack : undefined
       if (useTUI) {
-        printError(message.slice(0, 40))
+        // Show full error message, not truncated
+        printError(message)
+        if (stack) {
+          console.error(`\n${style.dim}${stack}${style.reset}`)
+        }
       } else {
         console.error(`\n${style.red}Error:${style.reset}`, message)
+        if (stack) {
+          console.error(`\n${style.dim}${stack}${style.reset}`)
+        }
       }
       process.exit(1)
     }
