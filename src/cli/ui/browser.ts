@@ -498,15 +498,22 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
           renderBrowser(state, height)
         }, 1500)
       } else if (keyStr === 'c' || keyStr === 'C') {
-        // c - Confirm/Next: proceed with current selection or folder
+        // c - Confirm/Next: proceed with current selection or highlighted folder
+        const entry = state.entries[state.selectedIndex]
+
         if (mode === 'select-input') {
           if (state.selectedFiles.size > 0) {
             // Return selected files
             cleanup()
             resolve({ cancelled: false, paths: Array.from(state.selectedFiles) })
             return
+          } else if (entry?.isDirectory && entry.name !== '..') {
+            // No files selected, but folder is highlighted - use that folder
+            cleanup()
+            resolve({ cancelled: false, paths: [entry.path] })
+            return
           } else {
-            // No files selected - use current directory (scan for videos)
+            // No files selected, no folder highlighted - use current directory
             cleanup()
             resolve({ cancelled: false, paths: [state.currentPath] })
             return
