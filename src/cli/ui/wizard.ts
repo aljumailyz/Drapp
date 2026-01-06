@@ -5,6 +5,8 @@
 
 import { browseForInput, browseForOutput, menu, prompt, confirm } from './browser.js'
 import { style } from './tui.js'
+import { stat, readdir } from 'node:fs/promises'
+import { join, extname, relative, basename } from 'node:path'
 import type {
   ArchivalCodec,
   ArchivalPreset,
@@ -12,10 +14,59 @@ import type {
   Av1Encoder
 } from '../../shared/types/archival.types.js'
 
+// Video extensions
+const VIDEO_EXTENSIONS = new Set([
+  '.mp4', '.mkv', '.mov', '.webm', '.avi',
+  '.m4v', '.ts', '.mts', '.m2ts', '.flv', '.wmv'
+])
+
+/**
+ * Recursively find all video files in a directory
+ */
+async function findVideoFilesRecursive(
+  rootPath: string,
+  basePath: string = rootPath
+): Promise<Array<{ absolutePath: string; relativePath: string }>> {
+  const files: Array<{ absolutePath: string; relativePath: string }> = []
+  const ignoredDirs = new Set(['.drapp', '.git', 'node_modules', '$RECYCLE.BIN', 'System Volume Information'])
+
+  async function walk(dir: string): Promise<void> {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true })
+
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name)
+
+        if (entry.isDirectory()) {
+          if (ignoredDirs.has(entry.name) || entry.name.startsWith('.')) {
+            continue
+          }
+          await walk(fullPath)
+        } else if (entry.isFile()) {
+          const ext = extname(entry.name).toLowerCase()
+          if (VIDEO_EXTENSIONS.has(ext)) {
+            files.push({
+              absolutePath: fullPath,
+              relativePath: relative(basePath, fullPath)
+            })
+          }
+        }
+      }
+    } catch {
+      // Skip directories we can't read
+    }
+  }
+
+  await walk(rootPath)
+  return files
+}
+
 export interface WizardResult {
   cancelled: boolean
   inputPaths: string[]
   outputPath: string
+  folderRoot?: string
+  relativePaths?: string[]
   options: WizardOptions
 }
 
@@ -36,8 +87,14 @@ export interface WizardOptions {
   audioBitrate: number
   twoPass: boolean
   overwrite: boolean
+  fillMode: boolean
   deleteIfLarger: boolean
   deleteOriginal: boolean
+  preserveStructure: boolean
+  extractThumbnail: boolean
+  extractCaptions: boolean
+  captionLanguage: string
+  threadLimit: 0 | 4 | 6
   simple: boolean
 }
 
@@ -80,11 +137,15 @@ ${style.cyan}╰─────────────────────�
 
   const inputMethod = await menu('Input method', [
     { label: 'Browse files', value: 'browse', description: 'Navigate and select individual files' },
+    { label: 'Select folder', value: 'folder', description: 'Select a folder to encode all videos recursively' },
     { label: 'Enter path', value: 'path', description: 'Type or paste a file/folder path' },
     { label: 'Current folder', value: 'current', description: 'Encode all videos in current directory' }
   ])
 
   let inputPaths: string[] = []
+  let folderRoot: string | undefined
+  let relativePaths: string[] | undefined
+  let preserveStructure = false
 
   if (inputMethod === 'browse') {
     const result = await browseForInput()
@@ -92,16 +153,98 @@ ${style.cyan}╰─────────────────────�
       return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
     }
     inputPaths = result.paths
+  } else if (inputMethod === 'folder') {
+    const result = await browseForOutput() // Use output browser for folder selection
+    if (result.cancelled) {
+      return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
+    }
+    const selectedFolder = result.paths[0]
+
+    clearScreen()
+    printSection('Step 1: Select Videos')
+    console.log(`${style.dim}Scanning folder for videos...${style.reset}\n`)
+
+    const files = await findVideoFilesRecursive(selectedFolder)
+
+    if (files.length === 0) {
+      console.log(`${style.yellow}No video files found in ${selectedFolder}${style.reset}`)
+      const tryAgain = await confirm('Try a different folder?')
+      if (tryAgain) {
+        return runWizard() // Restart wizard
+      }
+      return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
+    }
+
+    inputPaths = files.map(f => f.absolutePath)
+    relativePaths = files.map(f => f.relativePath)
+    folderRoot = selectedFolder
+
+    // Check if there are subfolders
+    const hasSubfolders = files.some(f => f.relativePath.includes('/') || f.relativePath.includes('\\'))
+
+    if (hasSubfolders) {
+      console.log(`Found ${style.cyan}${files.length}${style.reset} videos in ${style.cyan}${selectedFolder}${style.reset}`)
+      console.log(`${style.dim}Including files in subfolders${style.reset}\n`)
+
+      preserveStructure = await confirm('Preserve folder structure in output? (recommended for organized libraries)')
+    } else {
+      console.log(`Found ${style.cyan}${files.length}${style.reset} videos\n`)
+    }
   } else if (inputMethod === 'path') {
     clearScreen()
     printSection('Step 1: Select Videos')
-    const path = await prompt('Enter path to video file or folder')
-    if (!path) {
+    const inputPath = await prompt('Enter path to video file or folder')
+    if (!inputPath) {
       return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
     }
-    inputPaths = [path]
+
+    // Check if it's a directory
+    try {
+      const pathStat = await stat(inputPath)
+      if (pathStat.isDirectory()) {
+        console.log(`\n${style.dim}Scanning folder for videos...${style.reset}`)
+
+        const files = await findVideoFilesRecursive(inputPath)
+        if (files.length === 0) {
+          console.log(`${style.yellow}No video files found${style.reset}`)
+          return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
+        }
+
+        inputPaths = files.map(f => f.absolutePath)
+        relativePaths = files.map(f => f.relativePath)
+        folderRoot = inputPath
+
+        const hasSubfolders = files.some(f => f.relativePath.includes('/') || f.relativePath.includes('\\'))
+        if (hasSubfolders) {
+          console.log(`Found ${style.cyan}${files.length}${style.reset} videos\n`)
+          preserveStructure = await confirm('Preserve folder structure in output?')
+        }
+      } else {
+        inputPaths = [inputPath]
+      }
+    } catch {
+      inputPaths = [inputPath]
+    }
   } else {
-    inputPaths = [process.cwd()]
+    // Current folder
+    const currentDir = process.cwd()
+    console.log(`\n${style.dim}Scanning current folder for videos...${style.reset}`)
+
+    const files = await findVideoFilesRecursive(currentDir)
+    if (files.length === 0) {
+      console.log(`${style.yellow}No video files found in current directory${style.reset}`)
+      return { cancelled: true, inputPaths: [], outputPath: '', options: {} as WizardOptions }
+    }
+
+    inputPaths = files.map(f => f.absolutePath)
+    relativePaths = files.map(f => f.relativePath)
+    folderRoot = currentDir
+
+    const hasSubfolders = files.some(f => f.relativePath.includes('/') || f.relativePath.includes('\\'))
+    if (hasSubfolders) {
+      console.log(`Found ${style.cyan}${files.length}${style.reset} videos\n`)
+      preserveStructure = await confirm('Preserve folder structure in output?')
+    }
   }
 
   clearScreen()
@@ -110,6 +253,12 @@ ${style.cyan}╰─────────────────────�
     for (const p of inputPaths) {
       console.log(`  ${style.dim}${p}${style.reset}`)
     }
+  } else {
+    console.log(`  ${style.dim}${inputPaths[0]}${style.reset}`)
+    console.log(`  ${style.dim}...and ${inputPaths.length - 1} more${style.reset}`)
+  }
+  if (preserveStructure) {
+    console.log(`  ${style.cyan}(preserving folder structure)${style.reset}`)
   }
 
   // Step 2: Select Output
@@ -171,8 +320,14 @@ ${style.cyan}╰─────────────────────�
     audioBitrate: 160,
     twoPass: false,
     overwrite: false,
+    fillMode: false,
     deleteIfLarger: true,
     deleteOriginal: false,
+    preserveStructure: false,
+    extractThumbnail: false,
+    extractCaptions: false,
+    captionLanguage: 'auto',
+    threadLimit: 0,
     simple: false
   }
 
@@ -219,6 +374,22 @@ ${style.cyan}╰─────────────────────�
         { label: '1080p', value: '1080p' },
         { label: '720p', value: '720p' }
       ])
+    }
+
+    // Extras (also in standard mode)
+    console.log()
+    const wantExtras = await confirm('Enable extras? (thumbnails, captions)')
+    if (wantExtras) {
+      options.extractThumbnail = await confirm('Extract thumbnail from each video?')
+      options.extractCaptions = await confirm('Extract captions using AI transcription?')
+
+      if (options.extractCaptions) {
+        options.captionLanguage = await menu('Caption language', [
+          { label: 'Auto-detect', value: 'auto' },
+          { label: 'English', value: 'en' },
+          { label: 'Spanish', value: 'es' }
+        ])
+      }
     }
   } else {
     // Advanced mode
@@ -309,11 +480,55 @@ ${style.cyan}╰─────────────────────�
     }
 
     // Other options
-    console.log(`\n${style.bold}Other Options${style.reset}\n`)
+    console.log(`\n${style.bold}Encoding Options${style.reset}\n`)
     options.twoPass = await confirm('Enable two-pass encoding? (better quality, slower)')
+
+    // Thread limit
+    const threadChoice = await menu('Thread limit', [
+      { label: 'Unlimited (Default)', value: '0', description: 'Use all available CPU cores' },
+      { label: '6 threads', value: '6', description: 'Good balance for multi-tasking' },
+      { label: '4 threads', value: '4', description: 'Light CPU usage' }
+    ])
+    options.threadLimit = parseInt(threadChoice, 10) as 0 | 4 | 6
+
+    // Extras
+    console.log(`\n${style.bold}Extras${style.reset}\n`)
+    options.extractThumbnail = await confirm('Extract thumbnail from each video?')
+    options.extractCaptions = await confirm('Extract captions using AI transcription (Whisper)?')
+
+    if (options.extractCaptions) {
+      options.captionLanguage = await menu('Caption language', [
+        { label: 'Auto-detect', value: 'auto', description: 'Automatically detect spoken language' },
+        { label: 'English', value: 'en' },
+        { label: 'Spanish', value: 'es' },
+        { label: 'French', value: 'fr' },
+        { label: 'German', value: 'de' },
+        { label: 'Japanese', value: 'ja' },
+        { label: 'Chinese', value: 'zh' }
+      ])
+    }
+
+    // Output behavior
+    console.log(`\n${style.bold}Output Behavior${style.reset}\n`)
     options.overwrite = await confirm('Overwrite existing output files?')
+
+    if (!options.overwrite) {
+      options.fillMode = await confirm('Fill mode? (skip files that would conflict with existing outputs)')
+    }
+
     options.deleteIfLarger = await confirm('Delete output if larger than input? (recommended)')
+    options.deleteOriginal = await confirm('Delete original files after successful encoding? (DANGEROUS)')
+
+    if (options.deleteOriginal) {
+      const confirmDelete = await confirm(`${style.red}WARNING:${style.reset} This will permanently delete original files. Are you sure?`)
+      if (!confirmDelete) {
+        options.deleteOriginal = false
+      }
+    }
   }
+
+  // Set preserve structure from folder selection
+  options.preserveStructure = preserveStructure
 
   // Confirmation
   clearScreen()
@@ -324,10 +539,16 @@ ${style.cyan}╰─────────────────────�
     console.log(`  ${inputPaths[0]}`)
   } else {
     console.log(`  ${inputPaths.length} items selected`)
+    if (folderRoot) {
+      console.log(`  ${style.dim}from: ${folderRoot}${style.reset}`)
+    }
   }
 
   console.log(`\n${style.bold}Output:${style.reset}`)
   console.log(`  ${outputPath}`)
+  if (options.preserveStructure) {
+    console.log(`  ${style.cyan}(preserving folder structure)${style.reset}`)
+  }
 
   console.log(`\n${style.bold}Settings:${style.reset}`)
   console.log(`  Codec: ${style.cyan}${options.codec.toUpperCase()}${style.reset}`)
@@ -335,6 +556,30 @@ ${style.cyan}╰─────────────────────�
   console.log(`  Resolution: ${style.cyan}${options.resolution}${style.reset}`)
   console.log(`  Container: ${style.cyan}${options.container}${style.reset}`)
   console.log(`  Audio: ${style.cyan}${options.audioCopy ? 'copy' : options.audioCodec}${style.reset}`)
+  if (options.twoPass) {
+    console.log(`  Two-pass: ${style.cyan}yes${style.reset}`)
+  }
+  if (options.threadLimit > 0) {
+    console.log(`  Thread limit: ${style.cyan}${options.threadLimit}${style.reset}`)
+  }
+
+  // Show extras
+  const extras: string[] = []
+  if (options.extractThumbnail) extras.push('thumbnails')
+  if (options.extractCaptions) extras.push(`captions (${options.captionLanguage})`)
+  if (extras.length > 0) {
+    console.log(`  Extras: ${style.cyan}${extras.join(', ')}${style.reset}`)
+  }
+
+  // Show output behavior
+  if (options.overwrite) {
+    console.log(`  ${style.yellow}Will overwrite existing files${style.reset}`)
+  } else if (options.fillMode) {
+    console.log(`  Fill mode: ${style.cyan}skip existing${style.reset}`)
+  }
+  if (options.deleteOriginal) {
+    console.log(`  ${style.red}Will delete original files after encoding${style.reset}`)
+  }
 
   console.log()
   const confirmed = await confirm('Start encoding?')
@@ -347,6 +592,8 @@ ${style.cyan}╰─────────────────────�
     cancelled: false,
     inputPaths,
     outputPath,
+    folderRoot,
+    relativePaths,
     options
   }
 }

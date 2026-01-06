@@ -286,9 +286,21 @@ export const archiveCommand = new Command('archive')
         audioBitrate: String(wizardResult.options.audioBitrate),
         twoPass: wizardResult.options.twoPass,
         overwrite: wizardResult.options.overwrite,
+        fillMode: wizardResult.options.fillMode,
         deleteIfLarger: wizardResult.options.deleteIfLarger,
         deleteOriginal: wizardResult.options.deleteOriginal,
+        preserveStructure: wizardResult.options.preserveStructure,
+        thumbnail: wizardResult.options.extractThumbnail,
+        captions: wizardResult.options.extractCaptions,
+        captionLang: wizardResult.options.captionLanguage,
+        threads: String(wizardResult.options.threadLimit),
         simple: wizardResult.options.simple
+      }
+
+      // If wizard provided folder root and relative paths, use them
+      if (wizardResult.folderRoot && wizardResult.relativePaths) {
+        (options as any)._wizardFolderRoot = wizardResult.folderRoot
+        (options as any)._wizardRelativePaths = wizardResult.relativePaths
       }
 
       // If multiple files were selected, use them directly
@@ -357,17 +369,30 @@ export const archiveCommand = new Command('archive')
       let folderRoot: string | undefined
       let fileNames: string[] = []
 
-      // Check if wizard provided multiple paths directly
+      // Check if wizard provided multiple paths with folder structure
       const wizardPaths = (options as any)._wizardInputPaths as string[] | undefined
+      const wizardFolderRoot = (options as any)._wizardFolderRoot as string | undefined
+      const wizardRelativePaths = (options as any)._wizardRelativePaths as string[] | undefined
 
       if (wizardPaths && wizardPaths.length > 0) {
         // Use wizard-selected paths directly
         inputPaths = wizardPaths
-        relativePaths = wizardPaths.map(p => basename(p))
+
+        // Use wizard relative paths if provided (for preserve structure)
+        if (wizardRelativePaths && wizardRelativePaths.length === wizardPaths.length) {
+          relativePaths = wizardRelativePaths
+          folderRoot = wizardFolderRoot
+        } else {
+          relativePaths = wizardPaths.map(p => basename(p))
+        }
         fileNames = relativePaths
 
         if (!useTUI) {
-          console.log(`Selected ${style.cyan}${inputPaths.length}${style.reset} files\n`)
+          console.log(`Selected ${style.cyan}${inputPaths.length}${style.reset} files`)
+          if (options.preserveStructure && folderRoot) {
+            console.log(`${style.dim}Preserving folder structure from: ${folderRoot}${style.reset}`)
+          }
+          console.log()
         }
       } else if (inputStat.isDirectory()) {
         if (!useTUI) {
