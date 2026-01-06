@@ -27,7 +27,8 @@
       "Bash(node out/cli/index.js:*)",
       "Bash(node out/cli/index.cjs:*)",
       "Bash(chmod:*)",
-      "Bash(bash -n:*)"
+      "Bash(bash -n:*)",
+      "Bash(npm run build:cli:*)"
     ]
   }
 }

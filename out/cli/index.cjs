@@ -3097,12 +3097,12 @@ var {
 
 // src/cli/index.ts
 var import_node_fs4 = require("node:fs");
-var import_node_path7 = require("node:path");
+var import_node_path8 = require("node:path");
 var import_node_os4 = require("node:os");
 
 // src/cli/commands/archive.ts
-var import_promises4 = require("node:fs/promises");
-var import_node_path6 = require("node:path");
+var import_promises5 = require("node:fs/promises");
+var import_node_path7 = require("node:path");
 
 // src/main/services/archival/archival.service.ts
 var import_node_child_process6 = require("node:child_process");
@@ -3935,9 +3935,9 @@ function isTwoPassEnabled(config2) {
   return false;
 }
 function buildTwoPassArgs(inputPath, outputPath, config2, sourceInfo, passLogDir, cpuCapabilities) {
-  const { basename: basename5, join: join8 } = require("node:path");
-  const inputName = basename5(inputPath, require("node:path").extname(inputPath));
-  const passLogFile = join8(passLogDir, `${inputName}-pass`);
+  const { basename: basename6, join: join9 } = require("node:path");
+  const inputName = basename6(inputPath, require("node:path").extname(inputPath));
+  const passLogFile = join9(passLogDir, `${inputName}-pass`);
   if (config2.codec === "h265") {
     return buildH265TwoPassArgs(inputPath, outputPath, config2, sourceInfo, passLogFile, cpuCapabilities);
   }
@@ -7022,6 +7022,8 @@ var HIDE_CURSOR2 = `${ESC2}?25l`;
 var SHOW_CURSOR2 = `${ESC2}?25h`;
 var MOVE_TO2 = (row, col) => `${ESC2}${row};${col}H`;
 var CLEAR_LINE2 = `${ESC2}2K`;
+var ENABLE_MOUSE = "\x1B[?1000h\x1B[?1002h\x1B[?1015h\x1B[?1006h";
+var DISABLE_MOUSE = "\x1B[?1006l\x1B[?1015l\x1B[?1002l\x1B[?1000l";
 function formatSize(bytes) {
   if (bytes < 1024)
     return `${bytes} B`;
@@ -7087,19 +7089,23 @@ async function getEntries(dirPath) {
   }
   return entries;
 }
+function countVideos(entries) {
+  return entries.filter((e) => e.isVideo).length;
+}
 function renderBrowser(state, height) {
   const width = Math.min(process.stdout.columns || 80, 100);
-  const listHeight = height - 10;
+  state.listHeight = height - 10;
+  state.headerOffset = 6;
   process.stdout.write(MOVE_TO2(1, 1));
-  const modeText = state.mode === "select-input" ? "Select Input (files or folder)" : "Select Output Folder";
+  const modeText = state.mode === "select-input" ? "Select Videos (multi-select enabled)" : "Select Output Folder";
   console.log(CLEAR_LINE2 + `${style.cyan}\u256D${"\u2500".repeat(width - 2)}\u256E${style.reset}`);
-  console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset} ${style.bold}${modeText}${style.reset}${" ".repeat(width - 4 - modeText.length)} ${style.cyan}\u2502${style.reset}`);
+  console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset} ${style.bold}${modeText}${style.reset}${" ".repeat(Math.max(0, width - 4 - modeText.length))} ${style.cyan}\u2502${style.reset}`);
   console.log(CLEAR_LINE2 + `${style.cyan}\u251C${"\u2500".repeat(width - 2)}\u2524${style.reset}`);
   const pathDisplay = state.currentPath.length > width - 10 ? "..." + state.currentPath.slice(-(width - 13)) : state.currentPath;
   console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset} ${style.dim}${pathDisplay}${style.reset}${" ".repeat(Math.max(0, width - 4 - pathDisplay.length))} ${style.cyan}\u2502${style.reset}`);
   console.log(CLEAR_LINE2 + `${style.cyan}\u251C${"\u2500".repeat(width - 2)}\u2524${style.reset}`);
-  const visibleEntries = state.entries.slice(state.scrollOffset, state.scrollOffset + listHeight);
-  for (let i = 0; i < listHeight; i++) {
+  const visibleEntries = state.entries.slice(state.scrollOffset, state.scrollOffset + state.listHeight);
+  for (let i = 0; i < state.listHeight; i++) {
     const entry = visibleEntries[i];
     const absoluteIndex = state.scrollOffset + i;
     if (entry) {
@@ -7108,23 +7114,23 @@ function renderBrowser(state, height) {
       let icon = "  ";
       let nameStyle = "";
       if (entry.isDirectory) {
-        icon = `${style.blue}/${style.reset} `;
+        icon = `${style.blue}\u{1F4C1}${style.reset}`;
         nameStyle = style.blue;
       } else if (entry.isVideo) {
-        icon = `${style.green}>${style.reset} `;
+        icon = `${style.green}\u{1F3AC}${style.reset}`;
         nameStyle = style.green;
       } else {
-        icon = "  ";
+        icon = `${style.dim}\u{1F4C4}${style.reset}`;
         nameStyle = style.dim;
       }
-      const checkbox = state.mode === "select-input" ? isChecked ? `${style.green}[x]${style.reset} ` : `${style.dim}[ ]${style.reset} ` : "";
+      const checkbox = state.mode === "select-input" ? isChecked ? `${style.green}[\u2713]${style.reset} ` : `${style.dim}[ ]${style.reset} ` : "";
       const cursor = isSelected ? `${style.bgDark}` : "";
       const cursorEnd = isSelected ? `${style.reset}` : "";
       const sizeStr = entry.size ? ` ${style.dim}${formatSize(entry.size)}${style.reset}` : "";
-      const maxNameLen = width - 20 - (entry.size ? 10 : 0);
+      const maxNameLen = width - 24 - (entry.size ? 10 : 0);
       const displayName = entry.name.length > maxNameLen ? entry.name.slice(0, maxNameLen - 3) + "..." : entry.name;
-      const line = `${cursor}${checkbox}${icon}${nameStyle}${displayName}${style.reset}${sizeStr}${cursorEnd}`;
-      const visibleLen = displayName.length + (entry.size ? formatSize(entry.size).length + 1 : 0) + 4 + (state.mode === "select-input" ? 4 : 0);
+      const line = `${cursor}${checkbox}${icon} ${nameStyle}${displayName}${style.reset}${sizeStr}${cursorEnd}`;
+      const visibleLen = displayName.length + (entry.size ? formatSize(entry.size).length + 1 : 0) + 6 + (state.mode === "select-input" ? 4 : 0);
       const padding = Math.max(0, width - 4 - visibleLen);
       console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset} ${line}${" ".repeat(padding)} ${style.cyan}\u2502${style.reset}`);
     } else {
@@ -7132,19 +7138,28 @@ function renderBrowser(state, height) {
     }
   }
   console.log(CLEAR_LINE2 + `${style.cyan}\u251C${"\u2500".repeat(width - 2)}\u2524${style.reset}`);
-  if (state.mode === "select-input" && state.selectedFiles.size > 0) {
-    const countText = `${state.selectedFiles.size} item(s) selected`;
-    console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset} ${style.green}${countText}${style.reset}${" ".repeat(width - 4 - countText.length)} ${style.cyan}\u2502${style.reset}`);
+  if (state.mode === "select-input") {
+    const videoCount = countVideos(state.entries);
+    const selectedCount = state.selectedFiles.size;
+    const countText = selectedCount > 0 ? `${style.green}${selectedCount} selected${style.reset} \u2502 ${videoCount} videos in folder` : `${videoCount} videos in folder`;
+    console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset} ${countText}${" ".repeat(Math.max(0, width - 4 - countText.length + (selectedCount > 0 ? 11 : 0)))} ${style.cyan}\u2502${style.reset}`);
   } else {
     console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset}${" ".repeat(width - 2)}${style.cyan}\u2502${style.reset}`);
   }
-  const controls = state.mode === "select-input" ? "[\u2191\u2193] Navigate  [Space] Select  [Enter] Confirm  [a] Select All Videos  [q] Cancel" : "[\u2191\u2193] Navigate  [Enter] Select Folder  [n] New Folder  [q] Cancel";
+  let controls;
+  if (state.mode === "select-input") {
+    controls = "\u2191\u2193 Navigate \u2502 Space Select \u2502 a All \u2502 c Next \u2502 q Cancel";
+  } else {
+    controls = "\u2191\u2193 Navigate \u2502 Enter Open \u2502 c Confirm \u2502 n New \u2502 q Cancel";
+  }
   const controlsDisplay = controls.length > width - 4 ? controls.slice(0, width - 7) + "..." : controls;
   console.log(CLEAR_LINE2 + `${style.cyan}\u2502${style.reset} ${style.dim}${controlsDisplay}${style.reset}${" ".repeat(Math.max(0, width - 4 - controlsDisplay.length))} ${style.cyan}\u2502${style.reset}`);
   console.log(CLEAR_LINE2 + `${style.cyan}\u2570${"\u2500".repeat(width - 2)}\u256F${style.reset}`);
   if (state.message) {
     console.log(CLEAR_LINE2 + `
 ${state.message}`);
+  } else {
+    console.log(CLEAR_LINE2);
   }
 }
 async function browseForInput(startPath) {
@@ -7153,7 +7168,20 @@ async function browseForInput(startPath) {
 async function browseForOutput(startPath) {
   return browse(startPath || (0, import_node_os3.homedir)(), "select-output");
 }
+function parseMouseEvent(data) {
+  const sgrMatch = data.match(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
+  if (sgrMatch) {
+    return {
+      button: parseInt(sgrMatch[1], 10),
+      x: parseInt(sgrMatch[2], 10),
+      y: parseInt(sgrMatch[3], 10),
+      release: sgrMatch[4] === "m"
+    };
+  }
+  return null;
+}
 async function browse(startPath, mode) {
+  const height = process.stdout.rows || 24;
   const state = {
     currentPath: startPath,
     entries: await getEntries(startPath),
@@ -7161,17 +7189,21 @@ async function browse(startPath, mode) {
     selectedFiles: /* @__PURE__ */ new Set(),
     scrollOffset: 0,
     mode,
-    message: void 0
+    message: void 0,
+    lastSelectedIndex: void 0,
+    listHeight: height - 10,
+    headerOffset: 6
   };
-  const height = process.stdout.rows || 24;
   process.stdout.write(CLEAR_SCREEN2);
   process.stdout.write(HIDE_CURSOR2);
+  process.stdout.write(ENABLE_MOUSE);
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
   }
   process.stdin.resume();
   return new Promise((resolve) => {
     const cleanup = () => {
+      process.stdout.write(DISABLE_MOUSE);
       process.stdout.write(SHOW_CURSOR2);
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(false);
@@ -7181,7 +7213,58 @@ async function browse(startPath, mode) {
     };
     const onKeypress = async (key) => {
       const keyStr = key.toString();
-      const listHeight = height - 10;
+      const listHeight = state.listHeight;
+      const mouseEvent = parseMouseEvent(keyStr);
+      if (mouseEvent && !mouseEvent.release) {
+        const { button, y } = mouseEvent;
+        const clickedRow = y - state.headerOffset;
+        if (clickedRow >= 0 && clickedRow < listHeight) {
+          const clickedIndex = state.scrollOffset + clickedRow;
+          if (clickedIndex < state.entries.length) {
+            const entry = state.entries[clickedIndex];
+            if (button === 0) {
+              if (entry.isDirectory && entry.name !== "..") {
+                state.currentPath = entry.path;
+                state.entries = await getEntries(entry.path);
+                state.selectedIndex = 0;
+                state.scrollOffset = 0;
+              } else if (entry.isDirectory && entry.name === "..") {
+                state.currentPath = entry.path;
+                state.entries = await getEntries(entry.path);
+                state.selectedIndex = 0;
+                state.scrollOffset = 0;
+              } else if (mode === "select-input" && entry.isVideo) {
+                state.selectedIndex = clickedIndex;
+                if (state.selectedFiles.has(entry.path)) {
+                  state.selectedFiles.delete(entry.path);
+                } else {
+                  state.selectedFiles.add(entry.path);
+                  state.lastSelectedIndex = clickedIndex;
+                }
+              } else if (mode === "select-input" && !entry.isVideo && !entry.isDirectory) {
+                state.selectedIndex = clickedIndex;
+              }
+            } else if (button === 64) {
+              if (state.scrollOffset > 0) {
+                state.scrollOffset--;
+                if (state.selectedIndex > state.scrollOffset + listHeight - 1) {
+                  state.selectedIndex = state.scrollOffset + listHeight - 1;
+                }
+              }
+            } else if (button === 65) {
+              const maxScroll = Math.max(0, state.entries.length - listHeight);
+              if (state.scrollOffset < maxScroll) {
+                state.scrollOffset++;
+                if (state.selectedIndex < state.scrollOffset) {
+                  state.selectedIndex = state.scrollOffset;
+                }
+              }
+            }
+          }
+        }
+        renderBrowser(state, height);
+        return;
+      }
       if (keyStr === "" || keyStr === "q") {
         cleanup();
         resolve({ cancelled: true, paths: [] });
@@ -7201,26 +7284,108 @@ async function browse(startPath, mode) {
             state.scrollOffset = state.selectedIndex - listHeight + 1;
           }
         }
+      } else if (keyStr === "\x1B[5~") {
+        state.selectedIndex = Math.max(0, state.selectedIndex - listHeight);
+        state.scrollOffset = Math.max(0, state.scrollOffset - listHeight);
+      } else if (keyStr === "\x1B[6~") {
+        state.selectedIndex = Math.min(state.entries.length - 1, state.selectedIndex + listHeight);
+        if (state.selectedIndex >= state.scrollOffset + listHeight) {
+          const maxScroll = Math.max(0, state.entries.length - listHeight);
+          state.scrollOffset = Math.min(maxScroll, state.scrollOffset + listHeight);
+        }
+      } else if (keyStr === "\x1B[H" || keyStr === "\x1B[1~") {
+        state.selectedIndex = 0;
+        state.scrollOffset = 0;
+      } else if (keyStr === "\x1B[F" || keyStr === "\x1B[4~") {
+        state.selectedIndex = state.entries.length - 1;
+        state.scrollOffset = Math.max(0, state.entries.length - listHeight);
       } else if (keyStr === " " && mode === "select-input") {
         const entry = state.entries[state.selectedIndex];
-        if (entry && entry.name !== "..") {
+        if (entry && entry.isVideo) {
           if (state.selectedFiles.has(entry.path)) {
             state.selectedFiles.delete(entry.path);
           } else {
             state.selectedFiles.add(entry.path);
+            state.lastSelectedIndex = state.selectedIndex;
           }
-        }
-      } else if (keyStr === "a" && mode === "select-input") {
-        for (const entry of state.entries) {
-          if (entry.isVideo) {
-            state.selectedFiles.add(entry.path);
+          if (state.selectedIndex < state.entries.length - 1) {
+            state.selectedIndex++;
+            if (state.selectedIndex >= state.scrollOffset + listHeight) {
+              state.scrollOffset = state.selectedIndex - listHeight + 1;
+            }
           }
+        } else if (entry && entry.isDirectory) {
+          state.currentPath = entry.path;
+          state.entries = await getEntries(entry.path);
+          state.selectedIndex = 0;
+          state.scrollOffset = 0;
         }
-        state.message = `${style.green}Selected all videos in this folder${style.reset}`;
+      } else if ((keyStr === "a" || keyStr === "A") && mode === "select-input") {
+        const allVideosSelected = state.entries.filter((e) => e.isVideo).every((e) => state.selectedFiles.has(e.path));
+        if (allVideosSelected) {
+          for (const entry of state.entries) {
+            if (entry.isVideo) {
+              state.selectedFiles.delete(entry.path);
+            }
+          }
+          state.message = `${style.yellow}Deselected all videos in this folder${style.reset}`;
+        } else {
+          for (const entry of state.entries) {
+            if (entry.isVideo) {
+              state.selectedFiles.add(entry.path);
+            }
+          }
+          const count = countVideos(state.entries);
+          state.message = `${style.green}Selected ${count} video(s) in this folder${style.reset}`;
+        }
         setTimeout(() => {
           state.message = void 0;
           renderBrowser(state, height);
         }, 1500);
+      } else if ((keyStr === "d" || keyStr === "D") && mode === "select-input") {
+        const count = state.selectedFiles.size;
+        state.selectedFiles.clear();
+        state.message = `${style.yellow}Cleared ${count} selection(s)${style.reset}`;
+        setTimeout(() => {
+          state.message = void 0;
+          renderBrowser(state, height);
+        }, 1500);
+      } else if (keyStr === "*" && mode === "select-input") {
+        for (const entry of state.entries) {
+          if (entry.isVideo) {
+            if (state.selectedFiles.has(entry.path)) {
+              state.selectedFiles.delete(entry.path);
+            } else {
+              state.selectedFiles.add(entry.path);
+            }
+          }
+        }
+        state.message = `${style.cyan}Inverted selection${style.reset}`;
+        setTimeout(() => {
+          state.message = void 0;
+          renderBrowser(state, height);
+        }, 1500);
+      } else if (keyStr === "c" || keyStr === "C") {
+        const entry = state.entries[state.selectedIndex];
+        if (mode === "select-input") {
+          if (state.selectedFiles.size > 0) {
+            cleanup();
+            resolve({ cancelled: false, paths: Array.from(state.selectedFiles) });
+            return;
+          } else if (entry?.isDirectory && entry.name !== "..") {
+            cleanup();
+            resolve({ cancelled: false, paths: [entry.path] });
+            return;
+          } else {
+            cleanup();
+            resolve({ cancelled: false, paths: [state.currentPath] });
+            return;
+          }
+        } else if (mode === "select-output") {
+          cleanup();
+          resolve({ cancelled: false, paths: [state.currentPath] });
+          return;
+        }
       } else if (keyStr === "\r" || keyStr === "\n") {
         const entry = state.entries[state.selectedIndex];
         if (entry?.isDirectory) {
@@ -7228,18 +7393,16 @@ async function browse(startPath, mode) {
           state.entries = await getEntries(entry.path);
           state.selectedIndex = 0;
           state.scrollOffset = 0;
-        } else if (mode === "select-input") {
-          if (state.selectedFiles.size > 0) {
-            cleanup();
-            resolve({ cancelled: false, paths: Array.from(state.selectedFiles) });
-            return;
-          } else if (entry && !entry.isDirectory) {
-            cleanup();
-            resolve({ cancelled: false, paths: [entry.path] });
-            return;
+        } else if (mode === "select-input" && entry && !entry.isDirectory) {
+          if (entry.isVideo) {
+            if (state.selectedFiles.has(entry.path)) {
+              state.selectedFiles.delete(entry.path);
+            } else {
+              state.selectedFiles.add(entry.path);
+              state.lastSelectedIndex = state.selectedIndex;
+            }
           }
-        }
-        if (mode === "select-output") {
+        } else if (mode === "select-output" && !entry?.isDirectory) {
           cleanup();
           resolve({ cancelled: false, paths: [state.currentPath] });
           return;
@@ -7261,11 +7424,35 @@ async function browse(startPath, mode) {
           }
         });
         return;
-      } else if (keyStr === "g") {
+      } else if (keyStr === "g" || keyStr === "~") {
         state.currentPath = (0, import_node_os3.homedir)();
         state.entries = await getEntries(state.currentPath);
         state.selectedIndex = 0;
         state.scrollOffset = 0;
+      } else if (keyStr === "-" || keyStr === "h") {
+        const parentPath = (0, import_node_path5.dirname)(state.currentPath);
+        if (parentPath !== state.currentPath) {
+          state.currentPath = parentPath;
+          state.entries = await getEntries(parentPath);
+          state.selectedIndex = 0;
+          state.scrollOffset = 0;
+        }
+      } else if (keyStr === "l" || keyStr === "\x1B[C") {
+        const entry = state.entries[state.selectedIndex];
+        if (entry?.isDirectory) {
+          state.currentPath = entry.path;
+          state.entries = await getEntries(entry.path);
+          state.selectedIndex = 0;
+          state.scrollOffset = 0;
+        }
+      } else if (keyStr === "\x1B[D") {
+        const parentPath = (0, import_node_path5.dirname)(state.currentPath);
+        if (parentPath !== state.currentPath) {
+          state.currentPath = parentPath;
+          state.entries = await getEntries(parentPath);
+          state.selectedIndex = 0;
+          state.scrollOffset = 0;
+        }
       }
       renderBrowser(state, height);
     };
@@ -7273,15 +7460,21 @@ async function browse(startPath, mode) {
     renderBrowser(state, height);
   });
 }
-function confirm(message) {
+function confirm(message, defaultValue) {
   const rl = (0, import_node_readline.createInterface)({
     input: process.stdin,
     output: process.stdout
   });
+  const hint = defaultValue === true ? "(Y/n)" : "(y/N)";
   return new Promise((resolve) => {
-    rl.question(`${message} (y/N) `, (answer) => {
+    rl.question(`${message} ${hint} `, (answer) => {
       rl.close();
-      resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes");
+      const trimmed = answer.trim().toLowerCase();
+      if (trimmed === "") {
+        resolve(defaultValue ?? false);
+      } else {
+        resolve(trimmed === "y" || trimmed === "yes");
+      }
     });
   });
 }
@@ -7299,26 +7492,160 @@ function prompt(message, defaultValue) {
   });
 }
 async function menu(title, options) {
-  console.log(`
+  if (!process.stdin.isTTY) {
+    console.log(`
 ${style.bold}${title}${style.reset}
 `);
-  for (let i = 0; i < options.length; i++) {
-    const opt = options[i];
-    console.log(`  ${style.cyan}${i + 1}.${style.reset} ${opt.label}`);
-    if (opt.description) {
-      console.log(`     ${style.dim}${opt.description}${style.reset}`);
+    for (let i = 0; i < options.length; i++) {
+      console.log(`  ${style.cyan}${i + 1}.${style.reset} ${options[i].label}`);
     }
+    return options[0].value;
   }
-  console.log();
-  const answer = await prompt("Select option", "1");
-  const index = parseInt(answer, 10) - 1;
-  if (index >= 0 && index < options.length) {
-    return options[index].value;
-  }
-  return options[0].value;
+  return new Promise((resolve) => {
+    let selectedIndex = 0;
+    const height = options.length;
+    const render = () => {
+      if (selectedIndex > 0 || options.some((o) => o.description)) {
+        process.stdout.write(`\x1B[${height + 2}A`);
+      }
+      console.log(`
+${style.bold}${title}${style.reset}
+`);
+      for (let i = 0; i < options.length; i++) {
+        const opt = options[i];
+        const isSelected = i === selectedIndex;
+        const prefix = isSelected ? `${style.cyan}\u25B6${style.reset}` : " ";
+        const labelStyle = isSelected ? style.cyan : "";
+        const labelEnd = isSelected ? style.reset : "";
+        console.log(`  ${prefix} ${labelStyle}${opt.label}${labelEnd}`);
+        if (opt.description) {
+          console.log(`     ${style.dim}${opt.description}${style.reset}`);
+        }
+      }
+    };
+    console.log(`
+${style.bold}${title}${style.reset}
+`);
+    for (let i = 0; i < options.length; i++) {
+      const opt = options[i];
+      const isSelected = i === selectedIndex;
+      const prefix = isSelected ? `${style.cyan}\u25B6${style.reset}` : " ";
+      const labelStyle = isSelected ? style.cyan : "";
+      const labelEnd = isSelected ? style.reset : "";
+      console.log(`  ${prefix} ${labelStyle}${opt.label}${labelEnd}`);
+      if (opt.description) {
+        console.log(`     ${style.dim}${opt.description}${style.reset}`);
+      }
+    }
+    console.log(`
+${style.dim}\u2191\u2193 Navigate \u2502 Enter Select${style.reset}`);
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    const onKey = (key) => {
+      const keyStr = key.toString();
+      if (keyStr === "" || keyStr === "q") {
+        process.stdin.setRawMode(false);
+        process.stdin.removeListener("data", onKey);
+        process.stdin.pause();
+        resolve(options[0].value);
+        return;
+      }
+      if (keyStr === "\x1B[A" || keyStr === "k") {
+        if (selectedIndex > 0) {
+          selectedIndex--;
+          render();
+        }
+      } else if (keyStr === "\x1B[B" || keyStr === "j") {
+        if (selectedIndex < options.length - 1) {
+          selectedIndex++;
+          render();
+        }
+      } else if (keyStr === "\r" || keyStr === "\n" || keyStr === " ") {
+        process.stdin.setRawMode(false);
+        process.stdin.removeListener("data", onKey);
+        process.stdin.pause();
+        console.log();
+        resolve(options[selectedIndex].value);
+        return;
+      } else if (keyStr >= "1" && keyStr <= "9") {
+        const index = parseInt(keyStr, 10) - 1;
+        if (index < options.length) {
+          process.stdin.setRawMode(false);
+          process.stdin.removeListener("data", onKey);
+          process.stdin.pause();
+          console.log();
+          resolve(options[index].value);
+          return;
+        }
+      }
+    };
+    process.stdin.on("data", onKey);
+  });
 }
 
 // src/cli/ui/wizard.ts
+var import_promises4 = require("node:fs/promises");
+var import_node_path6 = require("node:path");
+var VIDEO_EXTENSIONS2 = /* @__PURE__ */ new Set([
+  ".mp4",
+  ".mkv",
+  ".mov",
+  ".webm",
+  ".avi",
+  ".m4v",
+  ".ts",
+  ".mts",
+  ".m2ts",
+  ".flv",
+  ".wmv"
+]);
+function findCommonAncestor(paths) {
+  if (paths.length === 0)
+    return "";
+  if (paths.length === 1)
+    return (0, import_node_path6.dirname)(paths[0]);
+  const splitPaths = paths.map((p) => (0, import_node_path6.dirname)(p).split(import_node_path6.sep));
+  const minLength = Math.min(...splitPaths.map((p) => p.length));
+  const commonParts = [];
+  for (let i = 0; i < minLength; i++) {
+    const segment = splitPaths[0][i];
+    if (splitPaths.every((p) => p[i] === segment)) {
+      commonParts.push(segment);
+    } else {
+      break;
+    }
+  }
+  return commonParts.join(import_node_path6.sep) || import_node_path6.sep;
+}
+async function findVideoFilesRecursive(rootPath, basePath = rootPath) {
+  const files = [];
+  const ignoredDirs = /* @__PURE__ */ new Set([".drapp", ".git", "node_modules", "$RECYCLE.BIN", "System Volume Information"]);
+  async function walk(dir) {
+    try {
+      const entries = await (0, import_promises4.readdir)(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = (0, import_node_path6.join)(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (ignoredDirs.has(entry.name) || entry.name.startsWith(".")) {
+            continue;
+          }
+          await walk(fullPath);
+        } else if (entry.isFile()) {
+          const ext = (0, import_node_path6.extname)(entry.name).toLowerCase();
+          if (VIDEO_EXTENSIONS2.has(ext)) {
+            files.push({
+              absolutePath: fullPath,
+              relativePath: (0, import_node_path6.relative)(basePath, fullPath)
+            });
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  await walk(rootPath);
+  return files;
+}
 function clearScreen() {
   process.stdout.write("\x1B[2J\x1B[H");
 }
@@ -7352,26 +7679,150 @@ ${style.cyan}\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
   console.log("Choose how to select your videos:\n");
   const inputMethod = await menu("Input method", [
     { label: "Browse files", value: "browse", description: "Navigate and select individual files" },
+    { label: "Select folder", value: "folder", description: "Select a folder to encode all videos recursively" },
     { label: "Enter path", value: "path", description: "Type or paste a file/folder path" },
     { label: "Current folder", value: "current", description: "Encode all videos in current directory" }
   ]);
   let inputPaths = [];
+  let folderRoot;
+  let relativePaths;
+  let preserveStructure = false;
   if (inputMethod === "browse") {
     const result = await browseForInput();
     if (result.cancelled) {
       return { cancelled: true, inputPaths: [], outputPath: "", options: {} };
     }
-    inputPaths = result.paths;
+    if (result.paths.length === 1) {
+      try {
+        const pathStat = await (0, import_promises4.stat)(result.paths[0]);
+        if (pathStat.isDirectory()) {
+          clearScreen();
+          printSection("Step 1: Select Videos");
+          console.log(`${style.dim}Scanning folder for videos...${style.reset}
+`);
+          const files = await findVideoFilesRecursive(result.paths[0]);
+          if (files.length === 0) {
+            console.log(`${style.yellow}No video files found in ${result.paths[0]}${style.reset}`);
+            const tryAgain = await confirm("Try again?");
+            if (tryAgain) {
+              return runWizard();
+            }
+            return { cancelled: true, inputPaths: [], outputPath: "", options: {} };
+          }
+          inputPaths = files.map((f) => f.absolutePath);
+          relativePaths = files.map((f) => f.relativePath);
+          folderRoot = result.paths[0];
+          const hasSubfolders = files.some((f) => f.relativePath.includes("/") || f.relativePath.includes("\\"));
+          console.log(`Found ${style.cyan}${files.length}${style.reset} videos`);
+          if (hasSubfolders) {
+            console.log(`${style.dim}Including files in subfolders${style.reset}
+`);
+            preserveStructure = await confirm("Preserve folder structure in output? (recommended for organized libraries)");
+          }
+        } else {
+          inputPaths = result.paths;
+          relativePaths = result.paths.map((p) => (0, import_node_path6.basename)(p));
+        }
+      } catch {
+        inputPaths = result.paths;
+        relativePaths = result.paths.map((p) => (0, import_node_path6.basename)(p));
+      }
+    } else {
+      inputPaths = result.paths;
+      folderRoot = findCommonAncestor(result.paths);
+      relativePaths = result.paths.map((p) => (0, import_node_path6.relative)(folderRoot, p));
+      const hasSubfolders = relativePaths.some((p) => p.includes(import_node_path6.sep) || p.includes("/"));
+      if (hasSubfolders) {
+        clearScreen();
+        printSection("Step 1: Select Videos");
+        console.log(`Selected ${style.cyan}${inputPaths.length}${style.reset} videos from multiple folders`);
+        console.log(`${style.dim}Common root: ${folderRoot}${style.reset}
+`);
+        preserveStructure = await confirm("Preserve folder structure in output? (recommended for organized libraries)");
+      }
+    }
+  } else if (inputMethod === "folder") {
+    const result = await browseForOutput();
+    if (result.cancelled) {
+      return { cancelled: true, inputPaths: [], outputPath: "", options: {} };
+    }
+    const selectedFolder = result.paths[0];
+    clearScreen();
+    printSection("Step 1: Select Videos");
+    console.log(`${style.dim}Scanning folder for videos...${style.reset}
+`);
+    const files = await findVideoFilesRecursive(selectedFolder);
+    if (files.length === 0) {
+      console.log(`${style.yellow}No video files found in ${selectedFolder}${style.reset}`);
+      const tryAgain = await confirm("Try a different folder?");
+      if (tryAgain) {
+        return runWizard();
+      }
+      return { cancelled: true, inputPaths: [], outputPath: "", options: {} };
+    }
+    inputPaths = files.map((f) => f.absolutePath);
+    relativePaths = files.map((f) => f.relativePath);
+    folderRoot = selectedFolder;
+    const hasSubfolders = files.some((f) => f.relativePath.includes("/") || f.relativePath.includes("\\"));
+    if (hasSubfolders) {
+      console.log(`Found ${style.cyan}${files.length}${style.reset} videos in ${style.cyan}${selectedFolder}${style.reset}`);
+      console.log(`${style.dim}Including files in subfolders${style.reset}
+`);
+      preserveStructure = await confirm("Preserve folder structure in output? (recommended for organized libraries)");
+    } else {
+      console.log(`Found ${style.cyan}${files.length}${style.reset} videos
+`);
+    }
   } else if (inputMethod === "path") {
     clearScreen();
     printSection("Step 1: Select Videos");
-    const path = await prompt("Enter path to video file or folder");
-    if (!path) {
+    const inputPath = await prompt("Enter path to video file or folder");
+    if (!inputPath) {
       return { cancelled: true, inputPaths: [], outputPath: "", options: {} };
     }
-    inputPaths = [path];
+    try {
+      const pathStat = await (0, import_promises4.stat)(inputPath);
+      if (pathStat.isDirectory()) {
+        console.log(`
+${style.dim}Scanning folder for videos...${style.reset}`);
+        const files = await findVideoFilesRecursive(inputPath);
+        if (files.length === 0) {
+          console.log(`${style.yellow}No video files found${style.reset}`);
+          return { cancelled: true, inputPaths: [], outputPath: "", options: {} };
+        }
+        inputPaths = files.map((f) => f.absolutePath);
+        relativePaths = files.map((f) => f.relativePath);
+        folderRoot = inputPath;
+        const hasSubfolders = files.some((f) => f.relativePath.includes("/") || f.relativePath.includes("\\"));
+        if (hasSubfolders) {
+          console.log(`Found ${style.cyan}${files.length}${style.reset} videos
+`);
+          preserveStructure = await confirm("Preserve folder structure in output?");
+        }
+      } else {
+        inputPaths = [inputPath];
+      }
+    } catch {
+      inputPaths = [inputPath];
+    }
   } else {
-    inputPaths = [process.cwd()];
+    const currentDir = process.cwd();
+    console.log(`
+${style.dim}Scanning current folder for videos...${style.reset}`);
+    const files = await findVideoFilesRecursive(currentDir);
+    if (files.length === 0) {
+      console.log(`${style.yellow}No video files found in current directory${style.reset}`);
+      return { cancelled: true, inputPaths: [], outputPath: "", options: {} };
+    }
+    inputPaths = files.map((f) => f.absolutePath);
+    relativePaths = files.map((f) => f.relativePath);
+    folderRoot = currentDir;
+    const hasSubfolders = files.some((f) => f.relativePath.includes("/") || f.relativePath.includes("\\"));
+    if (hasSubfolders) {
+      console.log(`Found ${style.cyan}${files.length}${style.reset} videos
+`);
+      preserveStructure = await confirm("Preserve folder structure in output?");
+    }
   }
   clearScreen();
   console.log(`
@@ -7380,6 +7831,12 @@ ${style.green}\u2713${style.reset} Selected ${inputPaths.length} item(s)`);
     for (const p of inputPaths) {
       console.log(`  ${style.dim}${p}${style.reset}`);
     }
+  } else {
+    console.log(`  ${style.dim}${inputPaths[0]}${style.reset}`);
+    console.log(`  ${style.dim}...and ${inputPaths.length - 1} more${style.reset}`);
+  }
+  if (preserveStructure) {
+    console.log(`  ${style.cyan}(preserving folder structure)${style.reset}`);
   }
   printSection("Step 2: Choose Output Location");
   console.log("Where should the encoded videos be saved?\n");
@@ -7430,8 +7887,14 @@ ${style.green}\u2713${style.reset} Output: ${outputPath}`);
     audioBitrate: 160,
     twoPass: false,
     overwrite: false,
+    fillMode: false,
     deleteIfLarger: true,
     deleteOriginal: false,
+    preserveStructure: false,
+    extractThumbnail: false,
+    extractCaptions: false,
+    captionLanguage: "auto",
+    threadLimit: 0,
     simple: false
   };
   if (configMode === "quick") {
@@ -7469,6 +7932,23 @@ ${style.green}\u2713${style.reset} Output: ${outputPath}`);
         { label: "1080p", value: "1080p" },
         { label: "720p", value: "720p" }
       ]);
+    }
+    console.log();
+    if (folderRoot && inputPaths.length > 1) {
+      preserveStructure = await confirm("Preserve folder structure in output?", preserveStructure);
+    }
+    console.log();
+    const wantExtras = await confirm("Enable extras? (thumbnails, captions)");
+    if (wantExtras) {
+      options.extractThumbnail = await confirm("Extract thumbnail from each video?");
+      options.extractCaptions = await confirm("Extract captions using AI transcription?");
+      if (options.extractCaptions) {
+        options.captionLanguage = await menu("Caption language", [
+          { label: "Auto-detect", value: "auto" },
+          { label: "English", value: "en" },
+          { label: "Spanish", value: "es" }
+        ]);
+      }
     }
   } else {
     clearScreen();
@@ -7545,12 +8025,51 @@ ${style.bold}Audio Settings${style.reset}
       options.audioBitrate = parseInt(bitrateStr, 10) || 160;
     }
     console.log(`
-${style.bold}Other Options${style.reset}
+${style.bold}Encoding Options${style.reset}
 `);
     options.twoPass = await confirm("Enable two-pass encoding? (better quality, slower)");
+    const threadChoice = await menu("Thread limit", [
+      { label: "Unlimited (Default)", value: "0", description: "Use all available CPU cores" },
+      { label: "6 threads", value: "6", description: "Good balance for multi-tasking" },
+      { label: "4 threads", value: "4", description: "Light CPU usage" }
+    ]);
+    options.threadLimit = parseInt(threadChoice, 10);
+    console.log(`
+${style.bold}Extras${style.reset}
+`);
+    options.extractThumbnail = await confirm("Extract thumbnail from each video?");
+    options.extractCaptions = await confirm("Extract captions using AI transcription (Whisper)?");
+    if (options.extractCaptions) {
+      options.captionLanguage = await menu("Caption language", [
+        { label: "Auto-detect", value: "auto", description: "Automatically detect spoken language" },
+        { label: "English", value: "en" },
+        { label: "Spanish", value: "es" },
+        { label: "French", value: "fr" },
+        { label: "German", value: "de" },
+        { label: "Japanese", value: "ja" },
+        { label: "Chinese", value: "zh" }
+      ]);
+    }
+    console.log(`
+${style.bold}Output Behavior${style.reset}
+`);
+    if (folderRoot && inputPaths.length > 1) {
+      preserveStructure = await confirm("Preserve folder structure in output?", preserveStructure);
+    }
     options.overwrite = await confirm("Overwrite existing output files?");
+    if (!options.overwrite) {
+      options.fillMode = await confirm("Fill mode? (skip files that would conflict with existing outputs)");
+    }
     options.deleteIfLarger = await confirm("Delete output if larger than input? (recommended)");
+    options.deleteOriginal = await confirm("Delete original files after successful encoding? (DANGEROUS)");
+    if (options.deleteOriginal) {
+      const confirmDelete = await confirm(`${style.red}WARNING:${style.reset} This will permanently delete original files. Are you sure?`);
+      if (!confirmDelete) {
+        options.deleteOriginal = false;
+      }
+    }
   }
+  options.preserveStructure = preserveStructure;
   clearScreen();
   printSection("Summary");
   console.log(`${style.bold}Input:${style.reset}`);
@@ -7558,10 +8077,16 @@ ${style.bold}Other Options${style.reset}
     console.log(`  ${inputPaths[0]}`);
   } else {
     console.log(`  ${inputPaths.length} items selected`);
+    if (folderRoot) {
+      console.log(`  ${style.dim}from: ${folderRoot}${style.reset}`);
+    }
   }
   console.log(`
 ${style.bold}Output:${style.reset}`);
   console.log(`  ${outputPath}`);
+  if (options.preserveStructure) {
+    console.log(`  ${style.cyan}(preserving folder structure)${style.reset}`);
+  }
   console.log(`
 ${style.bold}Settings:${style.reset}`);
   console.log(`  Codec: ${style.cyan}${options.codec.toUpperCase()}${style.reset}`);
@@ -7569,6 +8094,28 @@ ${style.bold}Settings:${style.reset}`);
   console.log(`  Resolution: ${style.cyan}${options.resolution}${style.reset}`);
   console.log(`  Container: ${style.cyan}${options.container}${style.reset}`);
   console.log(`  Audio: ${style.cyan}${options.audioCopy ? "copy" : options.audioCodec}${style.reset}`);
+  if (options.twoPass) {
+    console.log(`  Two-pass: ${style.cyan}yes${style.reset}`);
+  }
+  if (options.threadLimit > 0) {
+    console.log(`  Thread limit: ${style.cyan}${options.threadLimit}${style.reset}`);
+  }
+  const extras = [];
+  if (options.extractThumbnail)
+    extras.push("thumbnails");
+  if (options.extractCaptions)
+    extras.push(`captions (${options.captionLanguage})`);
+  if (extras.length > 0) {
+    console.log(`  Extras: ${style.cyan}${extras.join(", ")}${style.reset}`);
+  }
+  if (options.overwrite) {
+    console.log(`  ${style.yellow}Will overwrite existing files${style.reset}`);
+  } else if (options.fillMode) {
+    console.log(`  Fill mode: ${style.cyan}skip existing${style.reset}`);
+  }
+  if (options.deleteOriginal) {
+    console.log(`  ${style.red}Will delete original files after encoding${style.reset}`);
+  }
   console.log();
   const confirmed = await confirm("Start encoding?");
   if (!confirmed) {
@@ -7578,12 +8125,14 @@ ${style.bold}Settings:${style.reset}`);
     cancelled: false,
     inputPaths,
     outputPath,
+    folderRoot,
+    relativePaths,
     options
   };
 }
 
 // src/cli/commands/archive.ts
-var VIDEO_EXTENSIONS2 = /* @__PURE__ */ new Set([
+var VIDEO_EXTENSIONS3 = /* @__PURE__ */ new Set([
   ".mp4",
   ".mkv",
   ".mov",
@@ -7601,20 +8150,20 @@ async function findVideoFiles(rootPath, basePath = rootPath) {
   const ignoredDirs = /* @__PURE__ */ new Set([".drapp", ".git", "node_modules", "$RECYCLE.BIN", "System Volume Information"]);
   async function walk(dir) {
     try {
-      const entries = await (0, import_promises4.readdir)(dir, { withFileTypes: true });
+      const entries = await (0, import_promises5.readdir)(dir, { withFileTypes: true });
       for (const entry of entries) {
-        const fullPath = (0, import_node_path6.join)(dir, entry.name);
+        const fullPath = (0, import_node_path7.join)(dir, entry.name);
         if (entry.isDirectory()) {
           if (ignoredDirs.has(entry.name) || entry.name.startsWith(".")) {
             continue;
           }
           await walk(fullPath);
         } else if (entry.isFile()) {
-          const ext = (0, import_node_path6.extname)(entry.name).toLowerCase();
-          if (VIDEO_EXTENSIONS2.has(ext)) {
+          const ext = (0, import_node_path7.extname)(entry.name).toLowerCase();
+          if (VIDEO_EXTENSIONS3.has(ext)) {
             files.push({
               absolutePath: fullPath,
-              relativePath: (0, import_node_path6.relative)(basePath, fullPath)
+              relativePath: (0, import_node_path7.relative)(basePath, fullPath)
             });
           }
         }
@@ -7750,11 +8299,20 @@ ${style.yellow}Cancelled${style.reset}`);
       audioBitrate: String(wizardResult.options.audioBitrate),
       twoPass: wizardResult.options.twoPass,
       overwrite: wizardResult.options.overwrite,
+      fillMode: wizardResult.options.fillMode,
       deleteIfLarger: wizardResult.options.deleteIfLarger,
       deleteOriginal: wizardResult.options.deleteOriginal,
+      preserveStructure: wizardResult.options.preserveStructure,
+      thumbnail: wizardResult.options.extractThumbnail,
+      captions: wizardResult.options.extractCaptions,
+      captionLang: wizardResult.options.captionLanguage,
+      threads: String(wizardResult.options.threadLimit),
       simple: wizardResult.options.simple
     };
-    if (wizardResult.inputPaths.length > 1) {
+    if (wizardResult.folderRoot && wizardResult.relativePaths) {
+      options._wizardFolderRoot = wizardResult.folderRoot(options)._wizardRelativePaths = wizardResult.relativePaths;
+    }
+    if (wizardResult.inputPaths.length >= 1) {
       options._wizardInputPaths = wizardResult.inputPaths;
     }
   }
@@ -7784,7 +8342,7 @@ ${style.yellow}Encoding cancelled${style.reset}`);
   process.on("SIGTERM", shutdown);
   try {
     try {
-      await (0, import_promises4.access)(input);
+      await (0, import_promises5.access)(input);
     } catch {
       if (useTUI) {
         printError("Input path not found", input);
@@ -7798,19 +8356,29 @@ ${style.yellow}Encoding cancelled${style.reset}`);
     if (!useTUI) {
       printWelcome(codec, preset);
     }
-    const inputStat = await (0, import_promises4.stat)(input);
+    const inputStat = await (0, import_promises5.stat)(input);
     let inputPaths = [];
     let relativePaths = [];
     let folderRoot;
     let fileNames = [];
     const wizardPaths = options._wizardInputPaths;
+    const wizardFolderRoot = options._wizardFolderRoot;
+    const wizardRelativePaths = options._wizardRelativePaths;
     if (wizardPaths && wizardPaths.length > 0) {
       inputPaths = wizardPaths;
-      relativePaths = wizardPaths.map((p) => (0, import_node_path6.basename)(p));
+      if (wizardRelativePaths && wizardRelativePaths.length === wizardPaths.length) {
+        relativePaths = wizardRelativePaths;
+        folderRoot = wizardFolderRoot;
+      } else {
+        relativePaths = wizardPaths.map((p) => (0, import_node_path7.basename)(p));
+      }
       fileNames = relativePaths;
       if (!useTUI) {
-        console.log(`Selected ${style.cyan}${inputPaths.length}${style.reset} files
-`);
+        console.log(`Selected ${style.cyan}${inputPaths.length}${style.reset} files`);
+        if (options.preserveStructure && folderRoot) {
+          console.log(`${style.dim}Preserving folder structure from: ${folderRoot}${style.reset}`);
+        }
+        console.log();
       }
     } else if (inputStat.isDirectory()) {
       if (!useTUI) {
@@ -7835,10 +8403,10 @@ ${style.yellow}Encoding cancelled${style.reset}`);
       }
     } else {
       inputPaths = [input];
-      relativePaths = [(0, import_node_path6.basename)(input)];
-      fileNames = [(0, import_node_path6.basename)(input)];
+      relativePaths = [(0, import_node_path7.basename)(input)];
+      fileNames = [(0, import_node_path7.basename)(input)];
     }
-    await (0, import_promises4.mkdir)(output, { recursive: true });
+    await (0, import_promises5.mkdir)(output, { recursive: true });
     const presetConfig = ARCHIVAL_PRESETS[preset] || {};
     const config2 = {
       ...DEFAULT_ARCHIVAL_CONFIG,
@@ -7973,8 +8541,8 @@ ${style.red}Error:${style.reset}`, message);
 });
 
 // src/cli/index.ts
-var CONFIG_DIR = (0, import_node_path7.join)((0, import_node_os4.homedir)(), ".drapp");
-var CONFIG_FILE = (0, import_node_path7.join)(CONFIG_DIR, "cli-config.json");
+var CONFIG_DIR = (0, import_node_path8.join)((0, import_node_os4.homedir)(), ".drapp");
+var CONFIG_FILE = (0, import_node_path8.join)(CONFIG_DIR, "cli-config.json");
 function loadConfig() {
   try {
     if ((0, import_node_fs4.existsSync)(CONFIG_FILE)) {
