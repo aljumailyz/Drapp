@@ -8310,9 +8310,12 @@ ${style.yellow}Cancelled${style.reset}`);
       simple: wizardResult.options.simple
     };
     if (wizardResult.folderRoot && wizardResult.relativePaths) {
-      options._wizardFolderRoot = wizardResult.folderRoot(options)._wizardRelativePaths = wizardResult.relativePaths;
+      ;
+      options._wizardFolderRoot = wizardResult.folderRoot;
+      options._wizardRelativePaths = wizardResult.relativePaths;
     }
     if (wizardResult.inputPaths.length >= 1) {
+      ;
       options._wizardInputPaths = wizardResult.inputPaths;
     }
   }

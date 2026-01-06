@@ -299,14 +299,14 @@ export const archiveCommand = new Command('archive')
 
       // If wizard provided folder root and relative paths, use them
       if (wizardResult.folderRoot && wizardResult.relativePaths) {
-        (options as any)._wizardFolderRoot = wizardResult.folderRoot
-        (options as any)._wizardRelativePaths = wizardResult.relativePaths
+        ;(options as any)._wizardFolderRoot = wizardResult.folderRoot
+        ;(options as any)._wizardRelativePaths = wizardResult.relativePaths
       }
 
       // If files were selected (even just 1), use them directly
       // This handles both multi-select and folder selection with any number of videos
       if (wizardResult.inputPaths.length >= 1) {
-        (options as any)._wizardInputPaths = wizardResult.inputPaths
+        ;(options as any)._wizardInputPaths = wizardResult.inputPaths
       }
     }
 
