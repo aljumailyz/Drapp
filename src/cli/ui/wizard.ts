@@ -418,6 +418,13 @@ ${style.cyan}╰─────────────────────�
       ])
     }
 
+    // File organization
+    console.log()
+    if (folderRoot && inputPaths.length > 1) {
+      // Only ask if we have a folder with multiple files
+      preserveStructure = await confirm('Preserve folder structure in output?', preserveStructure)
+    }
+
     // Extras (also in standard mode)
     console.log()
     const wantExtras = await confirm('Enable extras? (thumbnails, captions)')
@@ -552,6 +559,12 @@ ${style.cyan}╰─────────────────────�
 
     // Output behavior
     console.log(`\n${style.bold}Output Behavior${style.reset}\n`)
+
+    // Preserve structure option (only if we have a folder with files)
+    if (folderRoot && inputPaths.length > 1) {
+      preserveStructure = await confirm('Preserve folder structure in output?', preserveStructure)
+    }
+
     options.overwrite = await confirm('Overwrite existing output files?')
 
     if (!options.overwrite) {

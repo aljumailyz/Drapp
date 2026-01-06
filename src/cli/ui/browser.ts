@@ -610,16 +610,25 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
 /**
  * Simple prompt for confirmation
  */
-export function confirm(message: string): Promise<boolean> {
+export function confirm(message: string, defaultValue?: boolean): Promise<boolean> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout
   })
 
+  // Show Y/n or y/N based on default
+  const hint = defaultValue === true ? '(Y/n)' : '(y/N)'
+
   return new Promise((resolve) => {
-    rl.question(`${message} (y/N) `, (answer) => {
+    rl.question(`${message} ${hint} `, (answer) => {
       rl.close()
-      resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes')
+      const trimmed = answer.trim().toLowerCase()
+      if (trimmed === '') {
+        // Empty input uses default
+        resolve(defaultValue ?? false)
+      } else {
+        resolve(trimmed === 'y' || trimmed === 'yes')
+      }
     })
   })
 }
