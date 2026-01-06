@@ -281,6 +281,7 @@ export const archiveCommand = new Command('archive')
         h265Preset: wizardResult.options.h265Preset,
         h265Crf: wizardResult.options.h265Crf ? String(wizardResult.options.h265Crf) : undefined,
         h265Tune: wizardResult.options.h265Tune,
+        h265Bframes: String(wizardResult.options.h265Bframes),
         audioCopy: wizardResult.options.audioCopy,
         audioCodec: wizardResult.options.audioCodec,
         audioBitrate: String(wizardResult.options.audioBitrate),

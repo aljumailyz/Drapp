@@ -7895,6 +7895,7 @@ ${style.green}\u2713${style.reset} Output: ${outputPath}`);
     av1Preset: 6,
     filmGrain: 10,
     h265Preset: "medium",
+    h265Bframes: 4,
     audioCopy: true,
     audioCodec: "aac",
     audioBitrate: 160,
@@ -8009,6 +8010,8 @@ ${style.bold}H.265 Settings${style.reset}
       if (tune) {
         options.h265Tune = tune;
       }
+      const bframesStr = await prompt("B-frames (0-16, higher=better compression)", "4");
+      options.h265Bframes = parseInt(bframesStr, 10) || 4;
     }
     console.log();
     options.resolution = await menu("Target Resolution", [
@@ -8307,6 +8310,7 @@ ${style.yellow}Cancelled${style.reset}`);
       h265Preset: wizardResult.options.h265Preset,
       h265Crf: wizardResult.options.h265Crf ? String(wizardResult.options.h265Crf) : void 0,
       h265Tune: wizardResult.options.h265Tune,
+      h265Bframes: String(wizardResult.options.h265Bframes),
       audioCopy: wizardResult.options.audioCopy,
       audioCodec: wizardResult.options.audioCodec,
       audioBitrate: String(wizardResult.options.audioBitrate),

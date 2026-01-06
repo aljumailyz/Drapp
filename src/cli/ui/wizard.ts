@@ -109,6 +109,7 @@ export interface WizardOptions {
   h265Preset: string
   h265Crf?: number
   h265Tune?: string
+  h265Bframes: number
   audioCopy: boolean
   audioCodec: 'opus' | 'aac' | 'flac'
   audioBitrate: number
@@ -401,6 +402,7 @@ ${style.cyan}╰─────────────────────�
     av1Preset: 6,
     filmGrain: 10,
     h265Preset: 'medium',
+    h265Bframes: 4,
     audioCopy: true,
     audioCodec: 'aac',
     audioBitrate: 160,
@@ -537,6 +539,9 @@ ${style.cyan}╰─────────────────────�
       if (tune) {
         options.h265Tune = tune
       }
+
+      const bframesStr = await prompt('B-frames (0-16, higher=better compression)', '4')
+      options.h265Bframes = parseInt(bframesStr, 10) || 4
     }
 
     // Resolution
