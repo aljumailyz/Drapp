@@ -221,9 +221,9 @@ function renderBrowser(state: BrowserState, height: number): void {
   // Controls - show different controls based on mode
   let controls: string
   if (state.mode === 'select-input') {
-    controls = '↑↓ Navigate │ Space Toggle │ a All │ Enter Select Folder/Confirm │ q Cancel'
+    controls = '↑↓ Navigate │ Space Select │ a All │ c Next │ q Cancel'
   } else {
-    controls = '↑↓ Navigate │ Enter Select Folder │ n New │ g Home │ q Cancel'
+    controls = '↑↓ Navigate │ Enter Open │ c Confirm │ n New │ q Cancel'
   }
 
   const controlsDisplay = controls.length > width - 4
@@ -437,11 +437,12 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
               state.scrollOffset = state.selectedIndex - listHeight + 1
             }
           }
-        } else if (entry && entry.isDirectory && entry.name !== '..') {
-          // Space on directory - select the folder (same as Enter)
-          cleanup()
-          resolve({ cancelled: false, paths: [entry.path] })
-          return
+        } else if (entry && entry.isDirectory) {
+          // Space on directory - navigate into it
+          state.currentPath = entry.path
+          state.entries = await getEntries(entry.path)
+          state.selectedIndex = 0
+          state.scrollOffset = 0
         }
       } else if ((keyStr === 'a' || keyStr === 'A') && mode === 'select-input') {
         // Select/deselect all videos in current directory
@@ -496,49 +497,48 @@ async function browse(startPath: string, mode: 'select-input' | 'select-output')
           state.message = undefined
           renderBrowser(state, height)
         }, 1500)
-      } else if (keyStr === '\r' || keyStr === '\n') {
-        // Enter
-        const entry = state.entries[state.selectedIndex]
-
+      } else if (keyStr === 'c' || keyStr === 'C') {
+        // c - Confirm/Next: proceed with current selection or folder
         if (mode === 'select-input') {
-          // Confirm selection
           if (state.selectedFiles.size > 0) {
             // Return selected files
             cleanup()
             resolve({ cancelled: false, paths: Array.from(state.selectedFiles) })
             return
-          } else if (entry?.isDirectory && entry.name !== '..') {
-            // Select this folder (return it so wizard can scan for videos)
-            cleanup()
-            resolve({ cancelled: false, paths: [entry.path] })
-            return
-          } else if (entry?.isDirectory && entry.name === '..') {
-            // Navigate to parent
-            state.currentPath = entry.path
-            state.entries = await getEntries(entry.path)
-            state.selectedIndex = 0
-            state.scrollOffset = 0
-          } else if (entry && !entry.isDirectory) {
-            // Select current file if nothing selected
-            cleanup()
-            resolve({ cancelled: false, paths: [entry.path] })
-            return
           } else {
-            // No entry selected - use current directory
+            // No files selected - use current directory (scan for videos)
             cleanup()
             resolve({ cancelled: false, paths: [state.currentPath] })
             return
           }
-        } else if (entry?.isDirectory) {
-          // Navigate into directory (for output mode or when not selecting)
+        } else if (mode === 'select-output') {
+          // Select current directory as output
+          cleanup()
+          resolve({ cancelled: false, paths: [state.currentPath] })
+          return
+        }
+      } else if (keyStr === '\r' || keyStr === '\n') {
+        // Enter - navigate into folders, or select single file
+        const entry = state.entries[state.selectedIndex]
+
+        if (entry?.isDirectory) {
+          // Navigate into directory
           state.currentPath = entry.path
           state.entries = await getEntries(entry.path)
           state.selectedIndex = 0
           state.scrollOffset = 0
-        }
-
-        if (mode === 'select-output') {
-          // Select current directory as output
+        } else if (mode === 'select-input' && entry && !entry.isDirectory) {
+          // Toggle selection on file (same as Space)
+          if (entry.isVideo) {
+            if (state.selectedFiles.has(entry.path)) {
+              state.selectedFiles.delete(entry.path)
+            } else {
+              state.selectedFiles.add(entry.path)
+              state.lastSelectedIndex = state.selectedIndex
+            }
+          }
+        } else if (mode === 'select-output' && !entry?.isDirectory) {
+          // In output mode with no folder selected, confirm current path
           cleanup()
           resolve({ cancelled: false, paths: [state.currentPath] })
           return
