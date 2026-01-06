@@ -6,7 +6,7 @@
 import { browseForInput, browseForOutput, menu, prompt, confirm } from './browser.js'
 import { style } from './tui.js'
 import { stat, readdir } from 'node:fs/promises'
-import { join, extname, relative, basename } from 'node:path'
+import { join, extname, relative, basename, dirname, sep } from 'node:path'
 import type {
   ArchivalCodec,
   ArchivalPreset,
@@ -19,6 +19,33 @@ const VIDEO_EXTENSIONS = new Set([
   '.mp4', '.mkv', '.mov', '.webm', '.avi',
   '.m4v', '.ts', '.mts', '.m2ts', '.flv', '.wmv'
 ])
+
+/**
+ * Find the common ancestor directory of multiple file paths
+ */
+function findCommonAncestor(paths: string[]): string {
+  if (paths.length === 0) return ''
+  if (paths.length === 1) return dirname(paths[0])
+
+  // Split all paths into segments
+  const splitPaths = paths.map(p => dirname(p).split(sep))
+
+  // Find the shortest path length
+  const minLength = Math.min(...splitPaths.map(p => p.length))
+
+  // Find common prefix
+  const commonParts: string[] = []
+  for (let i = 0; i < minLength; i++) {
+    const segment = splitPaths[0][i]
+    if (splitPaths.every(p => p[i] === segment)) {
+      commonParts.push(segment)
+    } else {
+      break
+    }
+  }
+
+  return commonParts.join(sep) || sep
+}
 
 /**
  * Recursively find all video files in a directory
@@ -187,13 +214,30 @@ ${style.cyan}╰─────────────────────�
             preserveStructure = await confirm('Preserve folder structure in output? (recommended for organized libraries)')
           }
         } else {
+          // Single file selected
           inputPaths = result.paths
+          relativePaths = result.paths.map(p => basename(p))
         }
       } catch {
         inputPaths = result.paths
+        relativePaths = result.paths.map(p => basename(p))
       }
     } else {
+      // Multiple files selected - calculate common ancestor for preserve structure
       inputPaths = result.paths
+      folderRoot = findCommonAncestor(result.paths)
+      relativePaths = result.paths.map(p => relative(folderRoot!, p))
+
+      // Check if files are from different subfolders
+      const hasSubfolders = relativePaths.some(p => p.includes(sep) || p.includes('/'))
+
+      if (hasSubfolders) {
+        clearScreen()
+        printSection('Step 1: Select Videos')
+        console.log(`Selected ${style.cyan}${inputPaths.length}${style.reset} videos from multiple folders`)
+        console.log(`${style.dim}Common root: ${folderRoot}${style.reset}\n`)
+        preserveStructure = await confirm('Preserve folder structure in output? (recommended for organized libraries)')
+      }
     }
   } else if (inputMethod === 'folder') {
     const result = await browseForOutput() // Use output browser for folder selection
