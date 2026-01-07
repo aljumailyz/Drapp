@@ -1073,6 +1073,7 @@ export type Api = {
   appChangePassword: (payload: { currentPassword: string; newPassword: string }) => Promise<{ ok: boolean; error?: string }>
   appRemovePassword: (password: string) => Promise<{ ok: boolean; error?: string }>
   appToggleLock: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
+  appResetPassword: () => Promise<{ ok: boolean; error?: string }>
 }
 
 export const api: Api = {
@@ -1350,5 +1351,7 @@ export const api: Api = {
   appRemovePassword: (password) =>
     ipcRenderer.invoke('app/remove-password', password) as Promise<{ ok: boolean; error?: string }>,
   appToggleLock: (enabled) =>
-    ipcRenderer.invoke('app/toggle-lock', enabled) as Promise<{ ok: boolean; error?: string }>
+    ipcRenderer.invoke('app/toggle-lock', enabled) as Promise<{ ok: boolean; error?: string }>,
+  appResetPassword: () =>
+    ipcRenderer.invoke('app/reset-password') as Promise<{ ok: boolean; error?: string }>
 }

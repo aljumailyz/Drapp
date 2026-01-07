@@ -199,4 +199,39 @@ export function registerAuthHandlers(): void {
       return { ok: false, error: error instanceof Error ? error.message : 'Failed to toggle lock' }
     }
   })
+
+  // Reset password without verification (for forgotten passwords)
+  // This is a destructive operation that wipes all user data
+  ipcMain.handle('app/reset-password', async () => {
+    try {
+      // Wrap all deletions in a transaction for atomicity
+      db.exec('BEGIN TRANSACTION')
+      try {
+        // Clear all user data tables
+        db.exec('DELETE FROM watch_history')
+        db.exec('DELETE FROM collection_videos')
+        db.exec('DELETE FROM collections')
+        db.exec('DELETE FROM private_items')
+        db.exec('DELETE FROM tag_events')
+        db.exec('DELETE FROM video_tags')
+        db.exec('DELETE FROM video_frames')
+        db.exec('DELETE FROM video_embeddings')
+        db.exec('DELETE FROM downloads')
+        db.exec('DELETE FROM jobs')
+        db.exec('DELETE FROM auth_sessions')
+        db.exec('DELETE FROM videos')
+        db.exec('DELETE FROM tags')
+        db.exec('DELETE FROM taxonomy_cache')
+        db.exec('DELETE FROM settings')
+        db.exec('COMMIT')
+      } catch (innerError) {
+        db.exec('ROLLBACK')
+        throw innerError
+      }
+
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'Failed to reset password' }
+    }
+  })
 }

@@ -191,6 +191,7 @@ const api = {
   appVerifyPassword: (password) => electron.ipcRenderer.invoke("app/verify-password", password),
   appChangePassword: (payload) => electron.ipcRenderer.invoke("app/change-password", payload),
   appRemovePassword: (password) => electron.ipcRenderer.invoke("app/remove-password", password),
-  appToggleLock: (enabled) => electron.ipcRenderer.invoke("app/toggle-lock", enabled)
+  appToggleLock: (enabled) => electron.ipcRenderer.invoke("app/toggle-lock", enabled),
+  appResetPassword: () => electron.ipcRenderer.invoke("app/reset-password")
 };
 electron.contextBridge.exposeInMainWorld("api", api);

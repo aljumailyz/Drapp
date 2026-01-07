@@ -5162,6 +5162,35 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Failed to toggle lock" };
     }
   });
+  ipcMain.handle("app/reset-password", async () => {
+    try {
+      db2.exec("BEGIN TRANSACTION");
+      try {
+        db2.exec("DELETE FROM watch_history");
+        db2.exec("DELETE FROM collection_videos");
+        db2.exec("DELETE FROM collections");
+        db2.exec("DELETE FROM private_items");
+        db2.exec("DELETE FROM tag_events");
+        db2.exec("DELETE FROM video_tags");
+        db2.exec("DELETE FROM video_frames");
+        db2.exec("DELETE FROM video_embeddings");
+        db2.exec("DELETE FROM downloads");
+        db2.exec("DELETE FROM jobs");
+        db2.exec("DELETE FROM auth_sessions");
+        db2.exec("DELETE FROM videos");
+        db2.exec("DELETE FROM tags");
+        db2.exec("DELETE FROM taxonomy_cache");
+        db2.exec("DELETE FROM settings");
+        db2.exec("COMMIT");
+      } catch (innerError) {
+        db2.exec("ROLLBACK");
+        throw innerError;
+      }
+      return { ok: true };
+    } catch (error2) {
+      return { ok: false, error: error2 instanceof Error ? error2.message : "Failed to reset password" };
+    }
+  });
 }
 const DOWNLOAD_URLS = {
   win32: {
