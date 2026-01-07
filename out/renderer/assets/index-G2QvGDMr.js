@@ -7727,6 +7727,8 @@ function useVideoSmartTagging(videoId, videoPath) {
 }
 const ARCHIVAL_CRF_DEFAULTS = {
   hdr: {
+    "8k": 30,
+    // 8K HDR needs good quality, aggressive: 31 max
     "4k": 29,
     // Ultra-safe: 28, aggressive: 30 max
     "1440p": 28,
@@ -7736,9 +7738,15 @@ const ARCHIVAL_CRF_DEFAULTS = {
     "720p": 27,
     // aggressive: 28 max
     "480p": 27,
-    "360p": 27
+    "360p": 27,
+    "240p": 26,
+    // Lower CRF for very small resolutions to preserve detail
+    "144p": 25
+    // Very low res needs lower CRF to maintain any detail
   },
   sdr: {
+    "8k": 31,
+    // 8K SDR, aggressive: 32 max
     "4k": 30,
     // aggressive: 31 max
     "1440p": 31,
@@ -7749,11 +7757,17 @@ const ARCHIVAL_CRF_DEFAULTS = {
     // default 32, aggressive: 34 max
     "480p": 34,
     // default 34
-    "360p": 36
+    "360p": 36,
     // default 36, aggressive: 37 max
+    "240p": 38,
+    // Higher CRF acceptable for very low resolution
+    "144p": 40
+    // Very low res, high CRF still looks acceptable
   }
 };
 const BITRATE_THRESHOLDS = {
+  "8k": { low: 25e6, medium: 5e7 },
+  // 25 Mbps / 50 Mbps
   "4k": { low: 8e6, medium: 15e6 },
   // 8 Mbps / 15 Mbps
   "1440p": { low: 4e6, medium: 8e6 },
@@ -7764,17 +7778,18 @@ const BITRATE_THRESHOLDS = {
   // 1.5 Mbps / 3 Mbps
   "480p": { low: 8e5, medium: 15e5 },
   // 800 kbps / 1.5 Mbps
-  "360p": { low: 4e5, medium: 8e5 }
+  "360p": { low: 4e5, medium: 8e5 },
   // 400 kbps / 800 kbps
+  "240p": { low: 2e5, medium: 4e5 },
+  // 200 kbps / 400 kbps
+  "144p": { low: 1e5, medium: 2e5 }
+  // 100 kbps / 200 kbps
 };
 function getBitrateAdjustedCrf(sourceInfo, baseCrf) {
   if (!sourceInfo.bitrate || sourceInfo.bitrate <= 0) {
     return { adjustedCrf: baseCrf, adjustment: 0 };
   }
   const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
-  if (resolution === "source") {
-    return { adjustedCrf: baseCrf, adjustment: 0 };
-  }
   const thresholds = BITRATE_THRESHOLDS[resolution];
   if (!thresholds) {
     return { adjustedCrf: baseCrf, adjustment: 0 };
@@ -7890,13 +7905,34 @@ const ARCHIVAL_PRESETS = {
   }
 };
 function getResolutionCategory(width, height) {
+  if (!width || !height || width <= 0 || height <= 0 || !isFinite(width) || !isFinite(height)) {
+    return "1080p";
+  }
   const pixels = Math.max(width, height);
+  if (pixels >= 7680) return "8k";
   if (pixels >= 3840) return "4k";
   if (pixels >= 2560) return "1440p";
   if (pixels >= 1920) return "1080p";
   if (pixels >= 1280) return "720p";
-  if (pixels >= 854) return "480p";
-  return "360p";
+  if (pixels >= 640) return "480p";
+  if (pixels >= 360) return "360p";
+  if (pixels >= 240) return "240p";
+  return "144p";
+}
+function getOptimalCrf(sourceInfo, customMatrix, enableBitrateAdjustment = true) {
+  const matrix = { ...ARCHIVAL_CRF_DEFAULTS, ...customMatrix };
+  const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
+  let baseCrf;
+  if (sourceInfo.isHdr) {
+    baseCrf = matrix.hdr[resolution] ?? matrix.hdr["1080p"];
+  } else {
+    baseCrf = matrix.sdr[resolution] ?? matrix.sdr["1080p"];
+  }
+  if (enableBitrateAdjustment && sourceInfo.bitrate) {
+    const { adjustedCrf } = getBitrateAdjustedCrf(sourceInfo, baseCrf);
+    return adjustedCrf;
+  }
+  return baseCrf;
 }
 function hasDolbyVision(hdrFormat) {
   if (!hdrFormat) return false;
@@ -7982,6 +8018,10 @@ const ENCODING_SPEED_MULTIPLIERS = {
   }
 };
 const RESOLUTION_SPEED_FACTORS = {
+  "144p": 8,
+  // Fastest - tiny resolution
+  "240p": 6,
+  // Very fast
   "360p": 4,
   // Much faster
   "480p": 2.5,
@@ -7991,6 +8031,8 @@ const RESOLUTION_SPEED_FACTORS = {
   "1440p": 0.6,
   "4k": 0.35,
   // Much slower
+  "8k": 0.1,
+  // Very slow - massive resolution
   "source": 1
   // Assume 1080p for source
 };
@@ -8032,12 +8074,15 @@ function formatEstimatedTime(seconds) {
 }
 const RESOLUTION_OPTIONS = [
   { value: "source", label: "Source (no change)" },
+  { value: "8k", label: "8K (4320p)" },
   { value: "4k", label: "4K (2160p)" },
   { value: "1440p", label: "1440p" },
   { value: "1080p", label: "1080p" },
   { value: "720p", label: "720p" },
   { value: "480p", label: "480p" },
-  { value: "360p", label: "360p" }
+  { value: "360p", label: "360p" },
+  { value: "240p", label: "240p" },
+  { value: "144p", label: "144p" }
 ];
 const CONTAINER_OPTIONS = [
   { value: "mkv", label: "MKV (recommended)" },
@@ -8753,8 +8798,7 @@ function Archive() {
           ] }),
           sourceInfo && (() => {
             const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
-            const lookupRes = resolution === "source" ? "1080p" : resolution;
-            const baseCrf = sourceInfo.isHdr ? ARCHIVAL_CRF_DEFAULTS.hdr[lookupRes] : ARCHIVAL_CRF_DEFAULTS.sdr[lookupRes];
+            const baseCrf = sourceInfo.isHdr ? ARCHIVAL_CRF_DEFAULTS.hdr[resolution] : ARCHIVAL_CRF_DEFAULTS.sdr[resolution];
             const crfInfo = sourceInfo.bitrate ? getBitrateAdjustedCrf({ ...sourceInfo, bitrate: sourceInfo.bitrate }, baseCrf) : null;
             return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-2", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600", children: [
@@ -8867,6 +8911,42 @@ function Archive() {
               }
             )
           ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "rounded-lg border border-slate-200 bg-white p-4", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-start gap-3", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "checkbox",
+                checked: config.intelligentMode ?? true,
+                onChange: (e) => handleConfigChange("intelligentMode", e.target.checked),
+                className: "mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm font-medium text-slate-700", children: "Intelligent Mode" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-0.5 text-xs text-slate-500", children: "Automatically selects optimal quality settings based on each video's resolution, HDR status, and bitrate." }),
+              (config.intelligentMode ?? true) && sourceInfo && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-600", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-medium", children: "Auto CRF:" }),
+                " ",
+                config.codec === "h265" ? (
+                  // For H.265, derive from AV1 optimal CRF (includes bitrate adjustment)
+                  (() => {
+                    const av1Crf = getOptimalCrf(sourceInfo);
+                    return Math.max(18, Math.min(28, av1Crf - 7));
+                  })()
+                ) : getOptimalCrf(sourceInfo),
+                " ",
+                "for ",
+                getResolutionCategory(sourceInfo.width, sourceInfo.height),
+                " ",
+                sourceInfo.isHdr ? "HDR" : "SDR",
+                sourceInfo.bitrate && sourceInfo.bitrate > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-slate-400", children: [
+                  " (",
+                  (sourceInfo.bitrate / 1e6).toFixed(1),
+                  " Mbps source)"
+                ] })
+              ] })
+            ] })
+          ] }) }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs(
             "button",
             {
@@ -8918,10 +8998,13 @@ function Archive() {
                   }
                 )
               ] }),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: config.intelligentMode ?? true ? "opacity-50" : "", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between", children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: "Quality (CRF)" }),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm font-semibold text-slate-700", children: config.av1?.crf ?? 30 })
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: [
+                    "Quality (CRF)",
+                    (config.intelligentMode ?? true) && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ml-2 text-[10px] font-normal text-blue-500", children: "(Auto)" })
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm font-semibold text-slate-700", children: (config.intelligentMode ?? true) && sourceInfo ? getOptimalCrf(sourceInfo) : config.av1?.crf ?? 30 })
                 ] }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx(
                   "input",
@@ -8929,9 +9012,10 @@ function Archive() {
                     type: "range",
                     min: 18,
                     max: 45,
-                    value: config.av1?.crf ?? 30,
+                    value: (config.intelligentMode ?? true) && sourceInfo ? getOptimalCrf(sourceInfo) : config.av1?.crf ?? 30,
                     onChange: (e) => handleAv1Change("crf", Number(e.target.value)),
-                    className: "mt-2 w-full accent-slate-900"
+                    disabled: config.intelligentMode ?? true,
+                    className: "mt-2 w-full accent-slate-900 disabled:cursor-not-allowed"
                   }
                 ),
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-1 flex justify-between text-[10px] text-slate-400", children: [
@@ -8948,7 +9032,8 @@ function Archive() {
                   {
                     type: "button",
                     onClick: () => handleAv1Change("crf", preset.value),
-                    className: `rounded px-2 py-1 text-[10px] transition ${config.av1?.crf === preset.value ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-600 hover:bg-slate-300"}`,
+                    disabled: config.intelligentMode ?? true,
+                    className: `rounded px-2 py-1 text-[10px] transition ${config.av1?.crf === preset.value ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-600 hover:bg-slate-300"} disabled:cursor-not-allowed disabled:hover:bg-slate-200`,
                     title: preset.desc,
                     children: [
                       preset.label,
@@ -8959,10 +9044,13 @@ function Archive() {
                   },
                   preset.value
                 )) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-2 text-[10px] text-slate-400", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-2 text-[10px] text-slate-400", children: config.intelligentMode ?? true ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Intelligent Mode:" }),
+                  " CRF is automatically optimized for each video."
+                ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
                   /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Tip:" }),
                   " AV1 CRF 30 is excellent for archival. Auto-adjusted based on resolution and HDR."
-                ] })
+                ] }) })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between", children: [
@@ -9032,10 +9120,19 @@ function Archive() {
                   }
                 )
               ] }),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: config.intelligentMode ?? true ? "opacity-50" : "", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between", children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: "Quality (CRF)" }),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm font-semibold text-slate-700", children: config.h265?.crf ?? 23 })
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: [
+                    "Quality (CRF)",
+                    (config.intelligentMode ?? true) && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ml-2 text-[10px] font-normal text-blue-500", children: "(Auto)" })
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm font-semibold text-slate-700", children: (() => {
+                    if ((config.intelligentMode ?? true) && sourceInfo) {
+                      const av1Crf = getOptimalCrf(sourceInfo);
+                      return Math.max(18, Math.min(28, av1Crf - 7));
+                    }
+                    return config.h265?.crf ?? 23;
+                  })() })
                 ] }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx(
                   "input",
@@ -9043,9 +9140,16 @@ function Archive() {
                     type: "range",
                     min: 18,
                     max: 35,
-                    value: config.h265?.crf ?? 23,
+                    value: (() => {
+                      if ((config.intelligentMode ?? true) && sourceInfo) {
+                        const av1Crf = getOptimalCrf(sourceInfo);
+                        return Math.max(18, Math.min(28, av1Crf - 7));
+                      }
+                      return config.h265?.crf ?? 23;
+                    })(),
                     onChange: (e) => handleH265Change("crf", Number(e.target.value)),
-                    className: "mt-2 w-full accent-slate-900"
+                    disabled: config.intelligentMode ?? true,
+                    className: "mt-2 w-full accent-slate-900 disabled:cursor-not-allowed"
                   }
                 ),
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-1 flex justify-between text-[10px] text-slate-400", children: [
@@ -9062,7 +9166,8 @@ function Archive() {
                   {
                     type: "button",
                     onClick: () => handleH265Change("crf", preset.value),
-                    className: `rounded px-2 py-1 text-[10px] transition ${config.h265?.crf === preset.value ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-600 hover:bg-slate-300"}`,
+                    disabled: config.intelligentMode ?? true,
+                    className: `rounded px-2 py-1 text-[10px] transition ${config.h265?.crf === preset.value ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-600 hover:bg-slate-300"} disabled:cursor-not-allowed disabled:hover:bg-slate-200`,
                     title: preset.desc,
                     children: [
                       preset.label,
@@ -9073,10 +9178,13 @@ function Archive() {
                   },
                   preset.value
                 )) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "mt-2 text-[10px] text-slate-400", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-2 text-[10px] text-slate-400", children: config.intelligentMode ?? true ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Intelligent Mode:" }),
+                  " CRF is automatically optimized for each video."
+                ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
                   /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Tip:" }),
                   " CRF 23 is ideal for web delivery. Use 20-22 for high quality archival, 26-28 for smaller files."
-                ] })
+                ] }) })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "block", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs font-medium uppercase tracking-wide text-slate-500", children: "Tune (optional)" }),

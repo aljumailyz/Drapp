@@ -144,8 +144,10 @@ function buildAv1TwoPassArgs(
   const options = config.av1
   const encoder = options.encoder
 
-  // Determine effective CRF
-  const effectiveCrf = options.crf !== 30 ? options.crf : getOptimalCrf(sourceInfo)
+  // Determine effective CRF based on intelligent mode
+  const effectiveCrf = config.intelligentMode
+    ? getOptimalCrf(sourceInfo)
+    : options.crf
 
   // ===== PASS 1 =====
   const pass1: string[] = []
@@ -258,6 +260,16 @@ function buildH265TwoPassArgs(
 ): TwoPassArgs {
   const options = config.h265
 
+  // Determine effective CRF based on intelligent mode
+  let effectiveCrf: number
+  if (config.intelligentMode) {
+    const av1OptimalCrf = getOptimalCrf(sourceInfo)
+    // Convert AV1 CRF to H.265 CRF scale
+    effectiveCrf = Math.max(18, Math.min(28, av1OptimalCrf - 7))
+  } else {
+    effectiveCrf = options.crf
+  }
+
   // ===== PASS 1 =====
   const pass1: string[] = []
   pass1.push('-i', inputPath)
@@ -268,7 +280,7 @@ function buildH265TwoPassArgs(
   }
 
   pass1.push('-c:v', options.encoder)
-  pass1.push('-crf', options.crf.toString())
+  pass1.push('-crf', effectiveCrf.toString())
   pass1.push('-preset', options.preset)
 
   // Build x265-params with pass=1
@@ -306,7 +318,7 @@ function buildH265TwoPassArgs(
   }
 
   pass2.push('-c:v', options.encoder)
-  pass2.push('-crf', options.crf.toString())
+  pass2.push('-crf', effectiveCrf.toString())
   pass2.push('-preset', options.preset)
 
   // Build x265-params with pass=2
@@ -484,10 +496,12 @@ function buildAv1FFmpegArgs(
   const encoder = config.av1.encoder
   args.push('-c:v', encoder)
 
-  // Determine effective CRF based on source info and config
-  const effectiveCrf = config.av1.crf !== 30
-    ? config.av1.crf
-    : getOptimalCrf(sourceInfo)
+  // Determine effective CRF based on intelligent mode and config
+  // If intelligentMode is enabled, automatically calculate optimal CRF
+  // Otherwise, use the user-specified CRF value
+  const effectiveCrf = config.intelligentMode
+    ? getOptimalCrf(sourceInfo)
+    : config.av1.crf
 
   // CRF quality
   args.push('-crf', effectiveCrf.toString())
@@ -596,8 +610,20 @@ function buildH265FFmpegArgs(
   // Video encoding with libx265
   args.push('-c:v', config.h265.encoder)
 
+  // Determine effective CRF based on intelligent mode
+  // For H.265, we calculate from AV1's optimal CRF (roughly H.265 CRF = AV1 CRF - 7)
+  let effectiveCrf: number
+  if (config.intelligentMode) {
+    const av1OptimalCrf = getOptimalCrf(sourceInfo)
+    // Convert AV1 CRF to H.265 CRF scale (H.265 typically 7 points lower)
+    // Clamp to valid H.265 range (18-28 for visually transparent quality)
+    effectiveCrf = Math.max(18, Math.min(28, av1OptimalCrf - 7))
+  } else {
+    effectiveCrf = config.h265.crf
+  }
+
   // CRF quality (H.265 uses 0-51 scale, 23 is default)
-  args.push('-crf', config.h265.crf.toString())
+  args.push('-crf', effectiveCrf.toString())
 
   // Preset for encoding speed/quality tradeoff
   args.push('-preset', config.h265.preset)

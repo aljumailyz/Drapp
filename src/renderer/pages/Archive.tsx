@@ -16,6 +16,7 @@ import {
   getErrorMessage,
   getResolutionCategory,
   getBitrateAdjustedCrf,
+  getOptimalCrf,
   estimateEncodingTime,
   formatEstimatedTime,
   type ArchivalPreset,
@@ -30,12 +31,15 @@ type PartialConfig = Partial<Omit<ArchivalEncodingConfigFull, 'outputDir'>>
 
 const RESOLUTION_OPTIONS = [
   { value: 'source', label: 'Source (no change)' },
+  { value: '8k', label: '8K (4320p)' },
   { value: '4k', label: '4K (2160p)' },
   { value: '1440p', label: '1440p' },
   { value: '1080p', label: '1080p' },
   { value: '720p', label: '720p' },
   { value: '480p', label: '480p' },
-  { value: '360p', label: '360p' }
+  { value: '360p', label: '360p' },
+  { value: '240p', label: '240p' },
+  { value: '144p', label: '144p' }
 ]
 
 const CONTAINER_OPTIONS = [
@@ -899,11 +903,11 @@ export default function Archive(): JSX.Element {
 
             {sourceInfo && (() => {
               // Compute CRF adjustment info
+              // getResolutionCategory returns a concrete resolution, never 'source'
               const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
-              const lookupRes = resolution === 'source' ? '1080p' : resolution
               const baseCrf = sourceInfo.isHdr
-                ? ARCHIVAL_CRF_DEFAULTS.hdr[lookupRes as keyof typeof ARCHIVAL_CRF_DEFAULTS.hdr]
-                : ARCHIVAL_CRF_DEFAULTS.sdr[lookupRes as keyof typeof ARCHIVAL_CRF_DEFAULTS.sdr]
+                ? ARCHIVAL_CRF_DEFAULTS.hdr[resolution]
+                : ARCHIVAL_CRF_DEFAULTS.sdr[resolution]
               const crfInfo = sourceInfo.bitrate
                 ? getBitrateAdjustedCrf({ ...sourceInfo, bitrate: sourceInfo.bitrate }, baseCrf)
                 : null
@@ -1046,6 +1050,43 @@ export default function Archive(): JSX.Element {
               </select>
             </label>
 
+            {/* Intelligent Mode Toggle */}
+            <div className="rounded-lg border border-slate-200 bg-white p-4">
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.intelligentMode ?? true}
+                  onChange={(e) => handleConfigChange('intelligentMode', e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                />
+                <div className="flex-1">
+                  <span className="text-sm font-medium text-slate-700">Intelligent Mode</span>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Automatically selects optimal quality settings based on each video's resolution, HDR status, and bitrate.
+                  </p>
+                  {(config.intelligentMode ?? true) && sourceInfo && (
+                    <div className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
+                      <span className="font-medium">Auto CRF:</span>{' '}
+                      {config.codec === 'h265' ? (
+                        // For H.265, derive from AV1 optimal CRF (includes bitrate adjustment)
+                        (() => {
+                          const av1Crf = getOptimalCrf(sourceInfo)
+                          // H.265 CRF scale is different: roughly AV1 CRF - 7
+                          return Math.max(18, Math.min(28, av1Crf - 7))
+                        })()
+                      ) : (
+                        getOptimalCrf(sourceInfo)
+                      )}{' '}
+                      for {getResolutionCategory(sourceInfo.width, sourceInfo.height)} {sourceInfo.isHdr ? 'HDR' : 'SDR'}
+                      {sourceInfo.bitrate && sourceInfo.bitrate > 0 && (
+                        <span className="text-slate-400"> ({(sourceInfo.bitrate / 1_000_000).toFixed(1)} Mbps source)</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </label>
+            </div>
+
             {/* Advanced Settings Toggle */}
             <button
               type="button"
@@ -1101,18 +1142,28 @@ export default function Archive(): JSX.Element {
                     )}
 
                     {/* AV1 CRF Quality */}
-                    <div>
+                    <div className={config.intelligentMode ?? true ? 'opacity-50' : ''}>
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Quality (CRF)</span>
-                        <span className="text-sm font-semibold text-slate-700">{config.av1?.crf ?? 30}</span>
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                          Quality (CRF)
+                          {(config.intelligentMode ?? true) && (
+                            <span className="ml-2 text-[10px] font-normal text-blue-500">(Auto)</span>
+                          )}
+                        </span>
+                        <span className="text-sm font-semibold text-slate-700">
+                          {(config.intelligentMode ?? true) && sourceInfo
+                            ? getOptimalCrf(sourceInfo)
+                            : config.av1?.crf ?? 30}
+                        </span>
                       </div>
                       <input
                         type="range"
                         min={18}
                         max={45}
-                        value={config.av1?.crf ?? 30}
+                        value={(config.intelligentMode ?? true) && sourceInfo ? getOptimalCrf(sourceInfo) : config.av1?.crf ?? 30}
                         onChange={(e) => handleAv1Change('crf', Number(e.target.value))}
-                        className="mt-2 w-full accent-slate-900"
+                        disabled={config.intelligentMode ?? true}
+                        className="mt-2 w-full accent-slate-900 disabled:cursor-not-allowed"
                       />
                       <div className="mt-1 flex justify-between text-[10px] text-slate-400">
                         <span>Higher quality (24-28)</span>
@@ -1130,11 +1181,12 @@ export default function Archive(): JSX.Element {
                             key={preset.value}
                             type="button"
                             onClick={() => handleAv1Change('crf', preset.value)}
+                            disabled={config.intelligentMode ?? true}
                             className={`rounded px-2 py-1 text-[10px] transition ${
                               config.av1?.crf === preset.value
                                 ? 'bg-slate-700 text-white'
                                 : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                            }`}
+                            } disabled:cursor-not-allowed disabled:hover:bg-slate-200`}
                             title={preset.desc}
                           >
                             {preset.label} ({preset.value})
@@ -1142,7 +1194,10 @@ export default function Archive(): JSX.Element {
                         ))}
                       </div>
                       <p className="mt-2 text-[10px] text-slate-400">
-                        <strong>Tip:</strong> AV1 CRF 30 is excellent for archival. Auto-adjusted based on resolution and HDR.
+                        {(config.intelligentMode ?? true)
+                          ? <><strong>Intelligent Mode:</strong> CRF is automatically optimized for each video.</>
+                          : <><strong>Tip:</strong> AV1 CRF 30 is excellent for archival. Auto-adjusted based on resolution and HDR.</>
+                        }
                       </p>
                     </div>
 
@@ -1227,18 +1282,40 @@ export default function Archive(): JSX.Element {
                     </label>
 
                     {/* H.265 CRF Quality */}
-                    <div>
+                    <div className={config.intelligentMode ?? true ? 'opacity-50' : ''}>
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Quality (CRF)</span>
-                        <span className="text-sm font-semibold text-slate-700">{config.h265?.crf ?? 23}</span>
+                        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                          Quality (CRF)
+                          {(config.intelligentMode ?? true) && (
+                            <span className="ml-2 text-[10px] font-normal text-blue-500">(Auto)</span>
+                          )}
+                        </span>
+                        <span className="text-sm font-semibold text-slate-700">
+                          {(() => {
+                            if ((config.intelligentMode ?? true) && sourceInfo) {
+                              // Calculate H.265 CRF from AV1 optimal CRF
+                              const av1Crf = getOptimalCrf(sourceInfo)
+                              // H.265 CRF scale is different: roughly AV1 CRF - 7
+                              return Math.max(18, Math.min(28, av1Crf - 7))
+                            }
+                            return config.h265?.crf ?? 23
+                          })()}
+                        </span>
                       </div>
                       <input
                         type="range"
                         min={18}
                         max={35}
-                        value={config.h265?.crf ?? 23}
+                        value={(() => {
+                          if ((config.intelligentMode ?? true) && sourceInfo) {
+                            const av1Crf = getOptimalCrf(sourceInfo)
+                            return Math.max(18, Math.min(28, av1Crf - 7))
+                          }
+                          return config.h265?.crf ?? 23
+                        })()}
                         onChange={(e) => handleH265Change('crf', Number(e.target.value))}
-                        className="mt-2 w-full accent-slate-900"
+                        disabled={config.intelligentMode ?? true}
+                        className="mt-2 w-full accent-slate-900 disabled:cursor-not-allowed"
                       />
                       <div className="mt-1 flex justify-between text-[10px] text-slate-400">
                         <span>Higher quality (18-22)</span>
@@ -1256,11 +1333,12 @@ export default function Archive(): JSX.Element {
                             key={preset.value}
                             type="button"
                             onClick={() => handleH265Change('crf', preset.value)}
+                            disabled={config.intelligentMode ?? true}
                             className={`rounded px-2 py-1 text-[10px] transition ${
                               config.h265?.crf === preset.value
                                 ? 'bg-slate-700 text-white'
                                 : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                            }`}
+                            } disabled:cursor-not-allowed disabled:hover:bg-slate-200`}
                             title={preset.desc}
                           >
                             {preset.label} ({preset.value})
@@ -1268,7 +1346,10 @@ export default function Archive(): JSX.Element {
                         ))}
                       </div>
                       <p className="mt-2 text-[10px] text-slate-400">
-                        <strong>Tip:</strong> CRF 23 is ideal for web delivery. Use 20-22 for high quality archival, 26-28 for smaller files.
+                        {(config.intelligentMode ?? true)
+                          ? <><strong>Intelligent Mode:</strong> CRF is automatically optimized for each video.</>
+                          : <><strong>Tip:</strong> CRF 23 is ideal for web delivery. Use 20-22 for high quality archival, 26-28 for smaller files.</>
+                        }
                       </p>
                     </div>
 

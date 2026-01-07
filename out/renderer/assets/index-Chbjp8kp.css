@@ -2453,6 +2453,10 @@ video {
   opacity: 0.25;
 }
 
+.opacity-50{
+  opacity: 0.5;
+}
+
 .opacity-60{
   opacity: 0.6;
 }
@@ -2910,6 +2914,11 @@ pre {
 
 .disabled\:opacity-70:disabled{
   opacity: 0.7;
+}
+
+.disabled\:hover\:bg-slate-200:hover:disabled{
+  --tw-bg-opacity: 1;
+  background-color: rgb(226 232 240 / var(--tw-bg-opacity, 1));
 }
 
 .group:hover .group-hover\:flex{

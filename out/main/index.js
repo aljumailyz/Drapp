@@ -5837,6 +5837,8 @@ class WhisperService {
 }
 const ARCHIVAL_CRF_DEFAULTS = {
   hdr: {
+    "8k": 30,
+    // 8K HDR needs good quality, aggressive: 31 max
     "4k": 29,
     // Ultra-safe: 28, aggressive: 30 max
     "1440p": 28,
@@ -5846,9 +5848,15 @@ const ARCHIVAL_CRF_DEFAULTS = {
     "720p": 27,
     // aggressive: 28 max
     "480p": 27,
-    "360p": 27
+    "360p": 27,
+    "240p": 26,
+    // Lower CRF for very small resolutions to preserve detail
+    "144p": 25
+    // Very low res needs lower CRF to maintain any detail
   },
   sdr: {
+    "8k": 31,
+    // 8K SDR, aggressive: 32 max
     "4k": 30,
     // aggressive: 31 max
     "1440p": 31,
@@ -5859,11 +5867,17 @@ const ARCHIVAL_CRF_DEFAULTS = {
     // default 32, aggressive: 34 max
     "480p": 34,
     // default 34
-    "360p": 36
+    "360p": 36,
     // default 36, aggressive: 37 max
+    "240p": 38,
+    // Higher CRF acceptable for very low resolution
+    "144p": 40
+    // Very low res, high CRF still looks acceptable
   }
 };
 const BITRATE_THRESHOLDS = {
+  "8k": { low: 25e6, medium: 5e7 },
+  // 25 Mbps / 50 Mbps
   "4k": { low: 8e6, medium: 15e6 },
   // 8 Mbps / 15 Mbps
   "1440p": { low: 4e6, medium: 8e6 },
@@ -5874,17 +5888,18 @@ const BITRATE_THRESHOLDS = {
   // 1.5 Mbps / 3 Mbps
   "480p": { low: 8e5, medium: 15e5 },
   // 800 kbps / 1.5 Mbps
-  "360p": { low: 4e5, medium: 8e5 }
+  "360p": { low: 4e5, medium: 8e5 },
   // 400 kbps / 800 kbps
+  "240p": { low: 2e5, medium: 4e5 },
+  // 200 kbps / 400 kbps
+  "144p": { low: 1e5, medium: 2e5 }
+  // 100 kbps / 200 kbps
 };
 function getBitrateAdjustedCrf(sourceInfo, baseCrf) {
   if (!sourceInfo.bitrate || sourceInfo.bitrate <= 0) {
     return { adjustedCrf: baseCrf, adjustment: 0 };
   }
   const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
-  if (resolution === "source") {
-    return { adjustedCrf: baseCrf, adjustment: 0 };
-  }
   const thresholds = BITRATE_THRESHOLDS[resolution];
   if (!thresholds) {
     return { adjustedCrf: baseCrf, adjustment: 0 };
@@ -5912,6 +5927,8 @@ function getBitrateAdjustedCrf(sourceInfo, baseCrf) {
 const DEFAULT_ARCHIVAL_CONFIG = {
   resolution: "source",
   colorMode: "auto",
+  intelligentMode: true,
+  // Auto-select optimal CRF based on source video
   codec: "av1",
   // Default to AV1 for best compression
   av1: {
@@ -5999,23 +6016,28 @@ const DEFAULT_ARCHIVAL_CONFIG = {
   }
 });
 function getResolutionCategory(width, height) {
+  if (!width || !height || width <= 0 || height <= 0 || !isFinite(width) || !isFinite(height)) {
+    return "1080p";
+  }
   const pixels = Math.max(width, height);
+  if (pixels >= 7680) return "8k";
   if (pixels >= 3840) return "4k";
   if (pixels >= 2560) return "1440p";
   if (pixels >= 1920) return "1080p";
   if (pixels >= 1280) return "720p";
-  if (pixels >= 854) return "480p";
-  return "360p";
+  if (pixels >= 640) return "480p";
+  if (pixels >= 360) return "360p";
+  if (pixels >= 240) return "240p";
+  return "144p";
 }
 function getOptimalCrf(sourceInfo, customMatrix, enableBitrateAdjustment = true) {
   const matrix = { ...ARCHIVAL_CRF_DEFAULTS, ...customMatrix };
   const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height);
-  const lookupResolution = resolution === "source" ? "1080p" : resolution;
   let baseCrf;
   if (sourceInfo.isHdr) {
-    baseCrf = matrix.hdr[lookupResolution] ?? matrix.hdr["1080p"];
+    baseCrf = matrix.hdr[resolution] ?? matrix.hdr["1080p"];
   } else {
-    baseCrf = matrix.sdr[lookupResolution] ?? matrix.sdr["1080p"];
+    baseCrf = matrix.sdr[resolution] ?? matrix.sdr["1080p"];
   }
   if (enableBitrateAdjustment && sourceInfo.bitrate) {
     const { adjustedCrf } = getBitrateAdjustedCrf(sourceInfo, baseCrf);
@@ -6104,7 +6126,7 @@ function buildTwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogDir,
 function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile) {
   const options = config.av1;
   const encoder = options.encoder;
-  const effectiveCrf = options.crf !== 30 ? options.crf : getOptimalCrf(sourceInfo);
+  const effectiveCrf = config.intelligentMode ? getOptimalCrf(sourceInfo) : options.crf;
   const pass1 = [];
   pass1.push("-i", inputPath);
   if (config.threadLimit > 0) {
@@ -6170,13 +6192,20 @@ function buildAv1TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogF
 }
 function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile, cpuCapabilities) {
   const options = config.h265;
+  let effectiveCrf;
+  if (config.intelligentMode) {
+    const av1OptimalCrf = getOptimalCrf(sourceInfo);
+    effectiveCrf = Math.max(18, Math.min(28, av1OptimalCrf - 7));
+  } else {
+    effectiveCrf = options.crf;
+  }
   const pass1 = [];
   pass1.push("-i", inputPath);
   if (config.threadLimit > 0) {
     pass1.push("-threads", String(config.threadLimit));
   }
   pass1.push("-c:v", options.encoder);
-  pass1.push("-crf", options.crf.toString());
+  pass1.push("-crf", effectiveCrf.toString());
   pass1.push("-preset", options.preset);
   const x265ParamsPass1 = buildX265ParamsWithPass(options, sourceInfo, 1, passLogFile, cpuCapabilities);
   if (x265ParamsPass1) {
@@ -6200,7 +6229,7 @@ function buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLog
     pass2.push("-threads", String(config.threadLimit));
   }
   pass2.push("-c:v", options.encoder);
-  pass2.push("-crf", options.crf.toString());
+  pass2.push("-crf", effectiveCrf.toString());
   pass2.push("-preset", options.preset);
   const x265ParamsPass2 = buildX265ParamsWithPass(options, sourceInfo, 2, passLogFile, cpuCapabilities);
   if (x265ParamsPass2) {
@@ -6295,7 +6324,7 @@ function buildAv1FFmpegArgs(inputPath, outputPath, config, sourceInfo) {
   }
   const encoder = config.av1.encoder;
   args.push("-c:v", encoder);
-  const effectiveCrf = config.av1.crf !== 30 ? config.av1.crf : getOptimalCrf(sourceInfo);
+  const effectiveCrf = config.intelligentMode ? getOptimalCrf(sourceInfo) : config.av1.crf;
   args.push("-crf", effectiveCrf.toString());
   if (encoder === "libsvtav1") {
     args.push("-preset", config.av1.preset.toString());
@@ -6342,7 +6371,14 @@ function buildH265FFmpegArgs(inputPath, outputPath, config, sourceInfo, cpuCapab
     args.push("-threads", String(config.threadLimit));
   }
   args.push("-c:v", config.h265.encoder);
-  args.push("-crf", config.h265.crf.toString());
+  let effectiveCrf;
+  if (config.intelligentMode) {
+    const av1OptimalCrf = getOptimalCrf(sourceInfo);
+    effectiveCrf = Math.max(18, Math.min(28, av1OptimalCrf - 7));
+  } else {
+    effectiveCrf = config.h265.crf;
+  }
+  args.push("-crf", effectiveCrf.toString());
   args.push("-preset", config.h265.preset);
   const x265Params = buildX265Params(config.h265, sourceInfo, cpuCapabilities);
   if (x265Params) {

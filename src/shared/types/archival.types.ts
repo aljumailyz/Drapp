@@ -1,7 +1,7 @@
 // Archival Processing Types for SVT-AV1 Encoding
 // Designed for long-term video archival with optimal compression
 
-export type ArchivalResolution = '4k' | '1440p' | '1080p' | '720p' | '480p' | '360p' | 'source'
+export type ArchivalResolution = '8k' | '4k' | '1440p' | '1080p' | '720p' | '480p' | '360p' | '240p' | '144p' | 'source'
 
 export type ArchivalColorMode = 'hdr' | 'sdr' | 'auto'
 
@@ -66,20 +66,26 @@ export interface VideoSourceInfo {
  */
 export interface ArchivalCrfMatrix {
   hdr: {
+    '8k': number
     '4k': number
     '1440p': number
     '1080p': number
     '720p': number
     '480p': number
     '360p': number
+    '240p': number
+    '144p': number
   }
   sdr: {
+    '8k': number
     '4k': number
     '1440p': number
     '1080p': number
     '720p': number
     '480p': number
     '360p': number
+    '240p': number
+    '144p': number
   }
 }
 
@@ -97,20 +103,26 @@ export interface ArchivalCrfMatrix {
  */
 export const ARCHIVAL_CRF_DEFAULTS: ArchivalCrfMatrix = {
   hdr: {
+    '8k': 30,    // 8K HDR needs good quality, aggressive: 31 max
     '4k': 29,    // Ultra-safe: 28, aggressive: 30 max
     '1440p': 28, // aggressive: 29 max
     '1080p': 28, // default 28, aggressive: 29 max
     '720p': 27,  // aggressive: 28 max
     '480p': 27,
-    '360p': 27
+    '360p': 27,
+    '240p': 26,  // Lower CRF for very small resolutions to preserve detail
+    '144p': 25   // Very low res needs lower CRF to maintain any detail
   },
   sdr: {
+    '8k': 31,    // 8K SDR, aggressive: 32 max
     '4k': 30,    // aggressive: 31 max
     '1440p': 31, // aggressive: 32 max
     '1080p': 29, // aggressive: 31-32 max
     '720p': 32,  // default 32, aggressive: 34 max
     '480p': 34,  // default 34
-    '360p': 36   // default 36, aggressive: 37 max
+    '360p': 36,  // default 36, aggressive: 37 max
+    '240p': 38,  // Higher CRF acceptable for very low resolution
+    '144p': 40   // Very low res, high CRF still looks acceptable
   }
 }
 
@@ -119,20 +131,26 @@ export const ARCHIVAL_CRF_DEFAULTS: ArchivalCrfMatrix = {
  */
 export const ARCHIVAL_CRF_MAX: ArchivalCrfMatrix = {
   hdr: {
+    '8k': 31,
     '4k': 30,
     '1440p': 29,
     '1080p': 29,
     '720p': 28,
     '480p': 28,
-    '360p': 28
+    '360p': 28,
+    '240p': 27,
+    '144p': 26
   },
   sdr: {
+    '8k': 33,
     '4k': 32,
     '1440p': 33,
     '1080p': 32,
     '720p': 34,
     '480p': 36,
-    '360p': 38
+    '360p': 38,
+    '240p': 40,
+    '144p': 42
   }
 }
 
@@ -151,12 +169,15 @@ export const BITRATE_THRESHOLDS: Record<
   Exclude<ArchivalResolution, 'source'>,
   { low: number; medium: number }
 > = {
+  '8k': { low: 25_000_000, medium: 50_000_000 }, // 25 Mbps / 50 Mbps
   '4k': { low: 8_000_000, medium: 15_000_000 }, // 8 Mbps / 15 Mbps
   '1440p': { low: 4_000_000, medium: 8_000_000 }, // 4 Mbps / 8 Mbps
   '1080p': { low: 2_500_000, medium: 5_000_000 }, // 2.5 Mbps / 5 Mbps
   '720p': { low: 1_500_000, medium: 3_000_000 }, // 1.5 Mbps / 3 Mbps
   '480p': { low: 800_000, medium: 1_500_000 }, // 800 kbps / 1.5 Mbps
-  '360p': { low: 400_000, medium: 800_000 } // 400 kbps / 800 kbps
+  '360p': { low: 400_000, medium: 800_000 }, // 400 kbps / 800 kbps
+  '240p': { low: 200_000, medium: 400_000 }, // 200 kbps / 400 kbps
+  '144p': { low: 100_000, medium: 200_000 } // 100 kbps / 200 kbps
 }
 
 /**
@@ -176,10 +197,8 @@ export function getBitrateAdjustedCrf(
     return { adjustedCrf: baseCrf, adjustment: 0 }
   }
 
+  // getResolutionCategory returns a concrete resolution, never 'source'
   const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
-  if (resolution === 'source') {
-    return { adjustedCrf: baseCrf, adjustment: 0 }
-  }
 
   const thresholds = BITRATE_THRESHOLDS[resolution]
   if (!thresholds) {
@@ -313,6 +332,10 @@ export interface ArchivalEncodingConfig {
   resolution: ArchivalResolution
   colorMode: ArchivalColorMode
 
+  // Intelligent mode - automatically selects optimal CRF based on source video
+  // When enabled, CRF is dynamically calculated based on resolution, HDR, and bitrate
+  intelligentMode: boolean
+
   // Codec selection - AV1 for maximum compression, H.265 for web compatibility
   codec: ArchivalCodec
 
@@ -372,6 +395,7 @@ export type ArchivalPreset = 'archive' | 'max-compression' | 'fast'
 export const DEFAULT_ARCHIVAL_CONFIG: Omit<ArchivalEncodingConfig, 'outputDir'> = {
   resolution: 'source',
   colorMode: 'auto',
+  intelligentMode: true, // Auto-select optimal CRF based on source video
 
   codec: 'av1', // Default to AV1 for best compression
 
@@ -617,16 +641,36 @@ export interface ArchivalProgressEvent {
 
 /**
  * Determine resolution category from video dimensions
+ * Handles all resolutions from 144p up to 8K, including non-standard aspect ratios
+ * Uses the larger dimension to categorize (works for portrait, landscape, square)
  */
-export function getResolutionCategory(width: number, height: number): ArchivalResolution {
+export function getResolutionCategory(width: number, height: number): Exclude<ArchivalResolution, 'source'> {
+  // Handle edge cases: invalid dimensions default to 1080p
+  if (!width || !height || width <= 0 || height <= 0 || !isFinite(width) || !isFinite(height)) {
+    return '1080p'
+  }
+
+  // Use the larger dimension to handle any aspect ratio (16:9, 4:3, 1:1, 9:16, etc.)
   const pixels = Math.max(width, height)
 
+  // 8K: 7680x4320 and above
+  if (pixels >= 7680) return '8k'
+  // 4K: 3840x2160 and above (also covers 4096x2160 DCI 4K)
   if (pixels >= 3840) return '4k'
+  // 1440p: 2560x1440 and above
   if (pixels >= 2560) return '1440p'
+  // 1080p: 1920x1080 and above
   if (pixels >= 1920) return '1080p'
+  // 720p: 1280x720 and above
   if (pixels >= 1280) return '720p'
-  if (pixels >= 854) return '480p'
-  return '360p'
+  // 480p: 854x480 and above (also covers 640x480 VGA)
+  if (pixels >= 640) return '480p'
+  // 360p: 640x360 and above
+  if (pixels >= 360) return '360p'
+  // 240p: 426x240 and above
+  if (pixels >= 240) return '240p'
+  // 144p: Everything below 240p (144x256, 176x144 QCIF, etc.)
+  return '144p'
 }
 
 /**
@@ -638,16 +682,14 @@ export function getOptimalCrf(
   enableBitrateAdjustment: boolean = true
 ): number {
   const matrix = { ...ARCHIVAL_CRF_DEFAULTS, ...customMatrix }
+  // getResolutionCategory returns a concrete resolution, never 'source'
   const resolution = getResolutionCategory(sourceInfo.width, sourceInfo.height)
-
-  // Handle 'source' resolution by defaulting to 1080p CRF
-  const lookupResolution = resolution === 'source' ? '1080p' : resolution
 
   let baseCrf: number
   if (sourceInfo.isHdr) {
-    baseCrf = matrix.hdr[lookupResolution] ?? matrix.hdr['1080p']
+    baseCrf = matrix.hdr[resolution] ?? matrix.hdr['1080p']
   } else {
-    baseCrf = matrix.sdr[lookupResolution] ?? matrix.sdr['1080p']
+    baseCrf = matrix.sdr[resolution] ?? matrix.sdr['1080p']
   }
 
   // Apply bitrate-aware adjustment if enabled and bitrate is available
@@ -709,13 +751,16 @@ export function shouldSkipEncoding(
   // Check bitrate thresholds for HEVC (already efficient codec)
   if (isHevc) {
     const bitrateKbps = bitrate / 1000
-    const thresholds: Record<string, number> = {
+    const thresholds: Record<Exclude<ArchivalResolution, 'source'>, number> = {
+      '8k': 40000,   // 40 Mbps
       '4k': 15000,   // 15 Mbps
       '1440p': 8000, // 8 Mbps
       '1080p': 4000, // 4 Mbps
       '720p': 2000,  // 2 Mbps
       '480p': 1000,  // 1 Mbps
-      '360p': 500    // 0.5 Mbps
+      '360p': 500,   // 0.5 Mbps
+      '240p': 300,   // 0.3 Mbps
+      '144p': 150    // 0.15 Mbps
     }
 
     const threshold = thresholds[resolution]
@@ -725,7 +770,7 @@ export function shouldSkipEncoding(
   }
 
   // Very low resolution and already small
-  if (resolution === '360p' && bitrate < 500000) { // < 500 kbps
+  if ((resolution === '360p' || resolution === '240p' || resolution === '144p') && bitrate < 500000) { // < 500 kbps
     return 'Very low resolution with low bitrate. Re-encoding may not improve quality or size.'
   }
 
@@ -921,12 +966,15 @@ const ENCODING_SPEED_MULTIPLIERS = {
  * Higher resolutions take proportionally longer to encode
  */
 const RESOLUTION_SPEED_FACTORS: Record<ArchivalResolution, number> = {
+  '144p': 8.0,    // Fastest - tiny resolution
+  '240p': 6.0,    // Very fast
   '360p': 4.0,    // Much faster
   '480p': 2.5,
   '720p': 1.5,
   '1080p': 1.0,   // Reference baseline
   '1440p': 0.6,
   '4k': 0.35,     // Much slower
+  '8k': 0.1,      // Very slow - massive resolution
   'source': 1.0   // Assume 1080p for source
 }
 

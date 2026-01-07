@@ -702,8 +702,9 @@ export type ArchivalBatchJob = {
 }
 
 export type ArchivalEncodingConfigFull = {
-  resolution: 'source' | '4k' | '1440p' | '1080p' | '720p' | '480p' | '360p'
+  resolution: 'source' | '8k' | '4k' | '1440p' | '1080p' | '720p' | '480p' | '360p' | '240p' | '144p'
   colorMode: 'hdr' | 'sdr' | 'auto'
+  intelligentMode: boolean
   codec: 'av1' | 'h265'
   av1: {
     encoder: 'libaom-av1' | 'libsvtav1'
