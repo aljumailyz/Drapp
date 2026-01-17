@@ -280,6 +280,39 @@ export type LibraryDeleteResponse = {
   error?: string
 }
 
+export type LibrarySelectImportFilesResponse = {
+  ok: boolean
+  paths?: string[]
+  canceled?: boolean
+  error?: string
+}
+
+export type LibraryExportVideosResponse = {
+  ok: boolean
+  exportedCount?: number
+  failedCount?: number
+  errors?: Array<{ videoId: string; error: string }>
+  error?: string
+}
+
+export type LibraryImportVideosResponse = {
+  ok: boolean
+  importedCount?: number
+  skippedCount?: number
+  failedCount?: number
+  errors?: Array<{ filePath: string; error: string }>
+  error?: string
+}
+
+export type ImportExportProgressEvent = {
+  operationType: 'import' | 'export'
+  current: number
+  total: number
+  currentFile: string
+  status: 'copying' | 'metadata' | 'complete' | 'error'
+  error?: string
+}
+
 export type LibraryCaptionExportResponse = {
   ok: boolean
   path?: string
@@ -962,6 +995,10 @@ export type Api = {
   libraryStats: () => Promise<LibraryStatsResponse>
   librarySetHidden: (payload: { videoId: string; hidden: boolean }) => Promise<LibraryMutationResponse>
   libraryDeleteVideo: (payload: { videoId: string }) => Promise<LibraryDeleteResponse>
+  librarySelectImportFiles: () => Promise<LibrarySelectImportFilesResponse>
+  libraryExportVideos: (payload: { videoIds: string[]; destinationDir: string }) => Promise<LibraryExportVideosResponse>
+  libraryImportVideos: (payload: { filePaths: string[] }) => Promise<LibraryImportVideosResponse>
+  onLibraryImportExportEvent: (listener: (event: ImportExportProgressEvent) => void) => () => void
   onLibraryScanProgress: (listener: (payload: LibraryScanProgress) => void) => () => void
   onLibraryScanComplete: (listener: (payload: LibraryScanComplete) => void) => () => void
   libraryGetPlayback: (videoId: string) => Promise<{ ok: boolean; position?: number; error?: string }>
@@ -1128,6 +1165,21 @@ export const api: Api = {
   libraryStats: () => ipcRenderer.invoke('library/stats') as Promise<LibraryStatsResponse>,
   librarySetHidden: (payload) => ipcRenderer.invoke('library/set-hidden', payload) as Promise<LibraryMutationResponse>,
   libraryDeleteVideo: (payload) => ipcRenderer.invoke('library/delete', payload) as Promise<LibraryDeleteResponse>,
+  librarySelectImportFiles: () =>
+    ipcRenderer.invoke('library/select-import-files') as Promise<LibrarySelectImportFilesResponse>,
+  libraryExportVideos: (payload) =>
+    ipcRenderer.invoke('library/export-videos', payload) as Promise<LibraryExportVideosResponse>,
+  libraryImportVideos: (payload) =>
+    ipcRenderer.invoke('library/import-videos', payload) as Promise<LibraryImportVideosResponse>,
+  onLibraryImportExportEvent: (listener) => {
+    const handler = (_event: IpcRendererEvent, payload: ImportExportProgressEvent) => {
+      listener(payload)
+    }
+    ipcRenderer.on('library/import-export-event', handler)
+    return () => {
+      ipcRenderer.removeListener('library/import-export-event', handler)
+    }
+  },
   onLibraryScanProgress: (listener) => {
     const handler = (_event: IpcRendererEvent, payload: LibraryScanProgress) => {
       listener(payload)

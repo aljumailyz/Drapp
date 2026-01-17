@@ -3,7 +3,7 @@ import VideoPlayer from '../components/player/VideoPlayer'
 import VideoTagManager from '../components/smart-tagging/VideoTagManager'
 import { useVideoSmartTagging } from '../hooks/useSmartTagging'
 import { useDownloadsStore } from '../stores/downloads.store'
-import type { LibraryIntegrityScanResponse, LibraryStatsResponse, PrivacySettings } from '../../preload/api'
+import type { ImportExportProgressEvent, LibraryIntegrityScanResponse, LibraryStatsResponse, PrivacySettings } from '../../preload/api'
 
 type LibraryVideo = {
   id: string
@@ -67,6 +67,15 @@ export default function Library(): JSX.Element {
   const [confirmIntegrityFix, setConfirmIntegrityFix] = useState(false)
   const [stats, setStats] = useState<LibraryStatsResponse['stats'] | null>(null)
   const [statsError, setStatsError] = useState<string | null>(null)
+
+  // Import/Export state
+  const [selectedVideoIds, setSelectedVideoIds] = useState<Set<string>>(new Set())
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const [isImporting, setIsImporting] = useState(false)
+  const [importExportProgress, setImportExportProgress] = useState<ImportExportProgressEvent | null>(null)
+  const [importExportError, setImportExportError] = useState<string | null>(null)
+  const [isDragOver, setIsDragOver] = useState(false)
 
   useEffect(() => {
     startPolling(15000)
@@ -246,6 +255,19 @@ export default function Library(): JSX.Element {
   useEffect(() => {
     void loadLibrary()
   }, [completedCount, loadLibrary])
+
+  // Clean up stale selections when videos change
+  useEffect(() => {
+    if (selectedVideoIds.size > 0) {
+      const videoIdSet = new Set(videos.map((v) => v.id))
+      const validSelections = new Set(
+        Array.from(selectedVideoIds).filter((id) => videoIdSet.has(id))
+      )
+      if (validSelections.size !== selectedVideoIds.size) {
+        setSelectedVideoIds(validSelections)
+      }
+    }
+  }, [videos, selectedVideoIds])
 
   useEffect(() => {
     let active = true
@@ -475,6 +497,116 @@ export default function Library(): JSX.Element {
     }
   }
 
+  // Import/Export event listener
+  useEffect(() => {
+    const unsubscribe = window.api.onLibraryImportExportEvent((event) => {
+      setImportExportProgress(event)
+      if (event.status === 'complete') {
+        setIsExporting(false)
+        setIsImporting(false)
+        setImportExportProgress(null)
+        void loadLibrary()
+      }
+      if (event.status === 'error' && event.error) {
+        setImportExportError(event.error)
+      }
+    })
+    return () => unsubscribe()
+  }, [loadLibrary])
+
+  // Video extensions for drag-drop filtering
+  const videoExtensions = new Set(['.mp4', '.mkv', '.mov', '.webm', '.avi', '.flv', '.m4v', '.wmv', '.mpg', '.mpeg'])
+
+  const handleDragOver = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = async (e: React.DragEvent): Promise<void> => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+
+    const files = Array.from(e.dataTransfer.files)
+      .filter((f) => {
+        const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase()
+        return videoExtensions.has(ext)
+      })
+      .map((f) => f.path)
+
+    if (files.length > 0) {
+      await handleImportFiles(files)
+    }
+  }
+
+  const handleImportFiles = async (filePaths: string[]): Promise<void> => {
+    setIsImporting(true)
+    setImportExportError(null)
+    try {
+      const result = await window.api.libraryImportVideos({ filePaths })
+      if (!result.ok) {
+        setImportExportError(result.error ?? 'Import failed')
+      }
+    } catch (error) {
+      setImportExportError(error instanceof Error ? error.message : 'Import failed')
+    } finally {
+      setIsImporting(false)
+      setImportExportProgress(null)
+    }
+  }
+
+  const handleSelectImportFiles = async (): Promise<void> => {
+    const result = await window.api.librarySelectImportFiles()
+    if (result.ok && result.paths) {
+      await handleImportFiles(result.paths)
+    }
+  }
+
+  const handleExportSelected = async (): Promise<void> => {
+    if (selectedVideoIds.size === 0) return
+
+    const folderResult = await window.api.librarySelectExportFolder()
+    if (!folderResult.ok || !folderResult.path) return
+
+    setIsExporting(true)
+    setImportExportError(null)
+    try {
+      const result = await window.api.libraryExportVideos({
+        videoIds: Array.from(selectedVideoIds),
+        destinationDir: folderResult.path
+      })
+      if (!result.ok) {
+        setImportExportError(result.error ?? 'Export failed')
+      }
+    } catch (error) {
+      setImportExportError(error instanceof Error ? error.message : 'Export failed')
+    } finally {
+      setIsExporting(false)
+      setImportExportProgress(null)
+      setSelectedVideoIds(new Set())
+      setIsMultiSelectMode(false)
+    }
+  }
+
+  const toggleVideoSelection = (videoId: string): void => {
+    setSelectedVideoIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(videoId)) {
+        next.delete(videoId)
+      } else {
+        next.add(videoId)
+      }
+      return next
+    })
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <section className="grid gap-4 lg:grid-cols-3">
@@ -615,10 +747,24 @@ export default function Library(): JSX.Element {
       </section>
 
       <section className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
-        <div className="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm">
+        <div
+          className="relative rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => void handleDrop(e)}
+        >
+          {/* Drop zone overlay */}
+          {isDragOver && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-slate-400 bg-slate-50/95">
+              <div className="text-center">
+                <p className="text-lg font-semibold text-slate-700">Drop videos here to import</p>
+                <p className="mt-1 text-sm text-slate-500">Videos will be copied to your library</p>
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-lg font-semibold text-slate-900">Library catalog</h3>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 {videos.length
                   ? `${filteredVideos.length} / ${videos.length}`
@@ -641,11 +787,72 @@ export default function Library(): JSX.Element {
                   Cancel
                 </button>
               ) : null}
+              <button
+                type="button"
+                onClick={() => void handleSelectImportFiles()}
+                className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600"
+                disabled={isImporting || isExporting}
+              >
+                {isImporting ? 'Importing...' : 'Import'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMultiSelectMode(!isMultiSelectMode)
+                  if (isMultiSelectMode) setSelectedVideoIds(new Set())
+                }}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+                  isMultiSelectMode
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 text-slate-600'
+                }`}
+                disabled={isImporting || isExporting}
+              >
+                {isMultiSelectMode ? `${selectedVideoIds.size} selected` : 'Select'}
+              </button>
+              {isMultiSelectMode && selectedVideoIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void handleExportSelected()}
+                  className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white"
+                  disabled={isExporting}
+                >
+                  {isExporting ? 'Exporting...' : `Export ${selectedVideoIds.size}`}
+                </button>
+              )}
             </div>
           </div>
-          <p className="mt-2 text-sm text-slate-500">Select a video to inspect metadata and smart tags.</p>
+          <p className="mt-2 text-sm text-slate-500">
+            {isMultiSelectMode
+              ? 'Click videos to select them for export.'
+              : 'Select a video to inspect metadata and smart tags. Drag videos here to import.'}
+          </p>
           {scanStatus ? <p className="mt-3 text-xs text-emerald-600">{scanStatus}</p> : null}
           {libraryError ? <p className="mt-2 text-xs text-rose-600">{libraryError}</p> : null}
+          {importExportError ? <p className="mt-2 text-xs text-rose-600">{importExportError}</p> : null}
+          {(isImporting || isExporting) && importExportProgress && (
+            <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+              <div className="flex items-center justify-between">
+                <span>
+                  {importExportProgress.operationType === 'import' ? 'Importing' : 'Exporting'}{' '}
+                  {importExportProgress.current} / {importExportProgress.total}
+                </span>
+              </div>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-slate-900 transition-all"
+                  style={{
+                    width: `${
+                      importExportProgress.total > 0
+                        ? Math.round((importExportProgress.current / importExportProgress.total) * 100)
+                        : 0
+                    }%`
+                  }}
+                />
+              </div>
+              <p className="mt-2 truncate text-[11px] text-slate-400">{importExportProgress.currentFile}</p>
+            </div>
+          )}
           <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-500">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -844,35 +1051,85 @@ export default function Library(): JSX.Element {
                       >
                         {visibleItems.map((video) => {
                           const isSelected = video.id === selectedVideoId
+                          const isChecked = selectedVideoIds.has(video.id)
                           return (
                             <button
                               key={video.id}
                               type="button"
-                              onClick={() => setSelectedVideoId(video.id)}
+                              onClick={() => {
+                                if (isMultiSelectMode) {
+                                  toggleVideoSelection(video.id)
+                                } else {
+                                  setSelectedVideoId(video.id)
+                                }
+                              }}
                               className={`h-[96px] w-full rounded-xl border px-4 py-3 text-left transition ${
-                                isSelected
-                                  ? 'border-slate-900 bg-slate-900 text-white'
-                                  : 'border-slate-200 bg-white text-slate-900 hover:border-slate-300'
+                                isMultiSelectMode && isChecked
+                                  ? 'border-blue-500 bg-blue-50 text-slate-900'
+                                  : isSelected
+                                    ? 'border-slate-900 bg-slate-900 text-white'
+                                    : 'border-slate-200 bg-white text-slate-900 hover:border-slate-300'
                               }`}
                             >
-                              <p className="truncate text-sm font-semibold">
-                                {video.title ?? video.file_name ?? 'Untitled'}
-                              </p>
-                              <p className={`mt-1 truncate text-xs ${isSelected ? 'text-slate-200' : 'text-slate-400'}`}>
-                                {video.file_path}
-                              </p>
-                              <p className={`mt-1 text-xs ${isSelected ? 'text-slate-200' : 'text-slate-500'}`}>
-                                {formatMetadataLine(video) ?? 'Metadata pending'}
-                              </p>
-                              {video.is_hidden ? (
-                                <span
-                                  className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                                    isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
-                                  }`}
-                                >
-                                  Hidden
-                                </span>
-                              ) : null}
+                              <div className="flex items-start gap-3">
+                                {isMultiSelectMode && (
+                                  <div
+                                    className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${
+                                      isChecked
+                                        ? 'border-blue-500 bg-blue-500'
+                                        : 'border-slate-300 bg-white'
+                                    }`}
+                                  >
+                                    {isChecked && (
+                                      <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                        <path
+                                          fillRule="evenodd"
+                                          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                          clipRule="evenodd"
+                                        />
+                                      </svg>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-semibold">
+                                    {video.title ?? video.file_name ?? 'Untitled'}
+                                  </p>
+                                  <p
+                                    className={`mt-1 truncate text-xs ${
+                                      isMultiSelectMode && isChecked
+                                        ? 'text-slate-500'
+                                        : isSelected
+                                          ? 'text-slate-200'
+                                          : 'text-slate-400'
+                                    }`}
+                                  >
+                                    {video.file_path}
+                                  </p>
+                                  <p
+                                    className={`mt-1 text-xs ${
+                                      isMultiSelectMode && isChecked
+                                        ? 'text-slate-600'
+                                        : isSelected
+                                          ? 'text-slate-200'
+                                          : 'text-slate-500'
+                                    }`}
+                                  >
+                                    {formatMetadataLine(video) ?? 'Metadata pending'}
+                                  </p>
+                                  {video.is_hidden ? (
+                                    <span
+                                      className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                        isSelected && !isMultiSelectMode
+                                          ? 'bg-white/20 text-white'
+                                          : 'bg-slate-100 text-slate-500'
+                                      }`}
+                                    >
+                                      Hidden
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
                             </button>
                           )
                         })}

@@ -1,9 +1,10 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { randomFillSync, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { open, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, parse } from 'node:path'
 import { getDatabase } from '../database'
+import { ImportExportService } from '../services/library/import-export.service'
 import { MetadataService } from '../services/library/metadata.service'
 import { ScannerService } from '../services/library/scanner.service'
 import { getSetting } from '../utils/settings'
@@ -566,6 +567,118 @@ export function registerLibraryHandlers(): void {
 
     return { ok: true, removedPath: row.file_path }
   })
+
+  // Import/Export handlers
+  const metadataService = new MetadataService()
+  const importExportService = new ImportExportService(db, metadataService)
+
+  ipcMain.handle('library/select-import-files', async () => {
+    const focusedWindow = BrowserWindow.getFocusedWindow()
+    const dialogOptions: Electron.OpenDialogOptions = {
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        {
+          name: 'Video Files',
+          extensions: ['mp4', 'mkv', 'mov', 'webm', 'avi', 'flv', 'm4v', 'wmv', 'mpg', 'mpeg']
+        }
+      ]
+    }
+    const result = focusedWindow
+      ? await dialog.showOpenDialog(focusedWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true }
+    }
+
+    return { ok: true, paths: result.filePaths }
+  })
+
+  ipcMain.handle(
+    'library/export-videos',
+    async (
+      event,
+      payload: {
+        videoIds: string[]
+        destinationDir: string
+      }
+    ) => {
+      if (!payload?.videoIds?.length || !payload.destinationDir) {
+        return { ok: false, error: 'Missing required parameters' }
+      }
+
+      const sender = event.sender
+
+      try {
+        const result = await importExportService.exportVideos(
+          { videoIds: payload.videoIds, destinationDir: payload.destinationDir },
+          (progress) => {
+            sender.send('library/import-export-event', {
+              operationType: 'export',
+              ...progress
+            })
+          }
+        )
+
+        return {
+          ok: true,
+          exportedCount: result.exportedCount,
+          failedCount: result.failedCount,
+          errors: result.errors
+        }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Export failed' }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'library/import-videos',
+    async (
+      event,
+      payload: {
+        filePaths: string[]
+      }
+    ) => {
+      if (!payload?.filePaths?.length) {
+        return { ok: false, error: 'No files provided' }
+      }
+
+      // Get library folder from settings or use download path
+      const libraryDir =
+        getSetting(db, 'library_import_folder') ??
+        getSetting(db, 'download_path') ??
+        getDefaultDownloadPath()
+
+      const sender = event.sender
+
+      try {
+        const result = await importExportService.importVideos(
+          { filePaths: payload.filePaths, libraryDir },
+          (progress) => {
+            sender.send('library/import-export-event', {
+              operationType: 'import',
+              ...progress
+            })
+          }
+        )
+
+        return {
+          ok: true,
+          importedCount: result.importedCount,
+          skippedCount: result.skippedCount,
+          failedCount: result.failedCount,
+          errors: result.errors
+        }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Import failed' }
+      }
+    }
+  )
+}
+
+function getDefaultDownloadPath(): string {
+  return app.getPath('downloads')
 }
 
 async function removeFile(filePath: string, secureDelete: boolean): Promise<void> {
