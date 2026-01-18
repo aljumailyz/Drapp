@@ -6,8 +6,15 @@ export default defineConfig({
   main: {
     entry: 'src/main/index.ts',
     build: {
+      commonjsOptions: {
+        ignoreDynamicRequires: true
+      },
       rollupOptions: {
-        external: ['better-sqlite3', 'bindings', 'node-gyp-build']
+        external: ['better-sqlite3', 'bindings', 'node-gyp-build'],
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].cjs'
+        }
       }
     }
   },
@@ -17,7 +24,7 @@ export default defineConfig({
       rollupOptions: {
         output: {
           format: 'cjs',
-          entryFileNames: 'index.js'
+          entryFileNames: '[name].cjs'
         }
       }
     }

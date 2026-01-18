@@ -4,7 +4,6 @@ import { copyFile, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, parse } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import type Database from 'better-sqlite3'
-import { Logger } from '../../utils/logger'
 import { MetadataService } from './metadata.service'
 
 const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024 // 100MB
@@ -76,7 +75,6 @@ type TagRow = {
 }
 
 export class ImportExportService {
-  private readonly logger = new Logger('ImportExportService')
   private readonly videoExtensions = new Set([
     '.mp4',
     '.mkv',
@@ -97,7 +95,7 @@ export class ImportExportService {
 
   async exportVideos(request: ExportRequest, onProgress?: ProgressCallback): Promise<ExportResult> {
     const { videoIds, destinationDir } = request
-    this.logger.info('Starting export', { count: videoIds.length, destinationDir })
+    // Starting export
 
     let exportedCount = 0
     let failedCount = 0
@@ -162,12 +160,12 @@ export class ImportExportService {
         await writeFile(metaPath, JSON.stringify(metadata, null, 2), 'utf-8')
 
         exportedCount++
-        this.logger.info('Exported video', { videoId, destVideoPath })
+        console.info('Exported video', { videoId, destVideoPath })
       } catch (error) {
         failedCount++
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
         errors.push({ videoId, error: errorMessage })
-        this.logger.warn('Failed to export video', { videoId, error: errorMessage })
+        console.warn('Failed to export video', { videoId, error: errorMessage })
       }
     }
 
@@ -178,13 +176,13 @@ export class ImportExportService {
       status: 'complete'
     })
 
-    this.logger.info('Export completed', { exportedCount, failedCount })
+    console.info('Export completed', { exportedCount, failedCount })
     return { exportedCount, failedCount, errors }
   }
 
   async importVideos(request: ImportRequest, onProgress?: ProgressCallback): Promise<ImportResult> {
     const { filePaths, libraryDir } = request
-    this.logger.info('Starting import', { count: filePaths.length, libraryDir })
+    console.info('Starting import', { count: filePaths.length, libraryDir })
 
     // Ensure library directory exists
     if (!existsSync(libraryDir)) {
@@ -254,12 +252,12 @@ export class ImportExportService {
 
         importedCount++
 
-        this.logger.info('Imported video', { filePath, destPath })
+        console.info('Imported video', { filePath, destPath })
       } catch (error) {
         failedCount++
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
         errors.push({ filePath, error: errorMessage })
-        this.logger.warn('Failed to import video', { filePath, error: errorMessage })
+        console.warn('Failed to import video', { filePath, error: errorMessage })
       }
     }
 
@@ -270,7 +268,7 @@ export class ImportExportService {
       status: 'complete'
     })
 
-    this.logger.info('Import completed', { importedCount, skippedCount, failedCount })
+    console.info('Import completed', { importedCount, skippedCount, failedCount })
     return { importedCount, skippedCount, failedCount, errors }
   }
 
@@ -324,7 +322,7 @@ export class ImportExportService {
       const metadata = JSON.parse(raw) as DrappMetadata
 
       if (metadata.version !== 1) {
-        this.logger.warn('Unsupported metadata version', { version: metadata.version })
+        console.warn('Unsupported metadata version', { version: metadata.version })
         return
       }
 
@@ -335,10 +333,10 @@ export class ImportExportService {
 
       if (video) {
         await this.restoreMetadataBundle(video.id, metadata)
-        this.logger.info('Restored metadata for video', { videoId: video.id })
+        console.info('Restored metadata for video', { videoId: video.id })
       }
     } catch (error) {
-      this.logger.warn('Failed to restore metadata', { metaPath, error })
+      console.warn('Failed to restore metadata', { metaPath, error })
     }
   }
 
@@ -446,7 +444,7 @@ export class ImportExportService {
         metadata.fileSize = fileInfo.size
       }
     } catch (error) {
-      this.logger.warn('Metadata extraction failed during import', { filePath, error })
+      console.warn('Metadata extraction failed during import', { filePath, error })
       try {
         const fileInfo = await stat(filePath)
         metadata.fileSize = fileInfo.size

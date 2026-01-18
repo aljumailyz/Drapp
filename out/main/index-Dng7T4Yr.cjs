@@ -1,20 +1,14 @@
-import { g as getDefaultExportFromCjs } from "./index.js";
-import require$$0$1 from "node:util";
-import require$$1$3 from "node:stream";
-import { c as commonjsRequire } from "./_commonjs-dynamic-modules-TGKdzP3c.js";
-import require$$1$1 from "child_process";
-import require$$1 from "fs";
-import require$$0 from "node:child_process";
-import require$$1$2 from "node:crypto";
-import require$$0$2 from "node:path";
-import require$$0$3 from "node:events";
-import os from "node:os";
-import __cjs_url__ from "node:url";
-import __cjs_path__ from "node:path";
-import __cjs_mod__ from "node:module";
-const __filename = __cjs_url__.fileURLToPath(import.meta.url);
-const __dirname = __cjs_path__.dirname(__filename);
-const require2 = __cjs_mod__.createRequire(import.meta.url);
+"use strict";
+const index$2 = require("./index.cjs");
+const require$$0$1 = require("node:util");
+const require$$1$3 = require("node:stream");
+const require$$1$1 = require("child_process");
+const require$$1 = require("fs");
+const require$$0 = require("node:child_process");
+const require$$1$2 = require("node:crypto");
+const require$$0$2 = require("node:path");
+const require$$0$3 = require("node:events");
+const os = require("node:os");
 const defined = function(val) {
   return typeof val !== "undefined" && val !== null;
 };
@@ -438,14 +432,14 @@ var constants = {
   FLAG_LOOSE: 2
 };
 var re$2 = { exports: {} };
-(function(module, exports$1) {
+(function(module2, exports$1) {
   const {
     MAX_SAFE_COMPONENT_LENGTH: MAX_SAFE_COMPONENT_LENGTH2,
     MAX_SAFE_BUILD_LENGTH: MAX_SAFE_BUILD_LENGTH2,
     MAX_LENGTH: MAX_LENGTH2
   } = constants;
   const debug2 = debug_1;
-  exports$1 = module.exports = {};
+  exports$1 = module2.exports = {};
   const re2 = exports$1.re = [];
   const safeRe = exports$1.safeRe = [];
   const src = exports$1.src = [];
@@ -1528,7 +1522,7 @@ let sharp$3;
 const errors = [];
 for (const path2 of paths) {
   try {
-    sharp$3 = commonjsRequire(path2);
+    sharp$3 = require(path2);
     break;
   } catch (err) {
     errors.push(err);
@@ -1574,7 +1568,7 @@ if (sharp$3) {
   }
   if (isLinux2 && /(symbol not found|CXXABI_)/i.test(messages)) {
     try {
-      const { config: config2 } = commonjsRequire(`@img/sharp-libvips-${runtimePlatform$1}/package`);
+      const { config: config2 } = require(`@img/sharp-libvips-${runtimePlatform$1}/package`);
       const libcFound = `${familySync()} ${versionSync()}`;
       const libcRequires = `${config2.musl ? "musl" : "glibc"} ${config2.musl || config2.glibc}`;
       help.push(
@@ -5608,16 +5602,16 @@ let versions = {
 if (!libvipsVersion.isGlobal) {
   if (!libvipsVersion.isWasm) {
     try {
-      versions = commonjsRequire(`@img/sharp-${runtimePlatform}/versions`);
+      versions = require(`@img/sharp-${runtimePlatform}/versions`);
     } catch (_) {
       try {
-        versions = commonjsRequire(`@img/sharp-libvips-${runtimePlatform}/versions`);
+        versions = require(`@img/sharp-libvips-${runtimePlatform}/versions`);
       } catch (_2) {
       }
     }
   } else {
     try {
-      versions = require2("@img/sharp-wasm32/versions");
+      versions = require("@img/sharp-wasm32/versions");
     } catch (_) {
     }
   }
@@ -5700,11 +5694,9 @@ channel(Sharp);
 output(Sharp);
 utility(Sharp);
 var lib = Sharp;
-const index = /* @__PURE__ */ getDefaultExportFromCjs(lib);
+const index = /* @__PURE__ */ index$2.getDefaultExportFromCjs(lib);
 const index$1 = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
   default: index
 }, Symbol.toStringTag, { value: "Module" }));
-export {
-  index$1 as i
-};
+exports.index = index$1;

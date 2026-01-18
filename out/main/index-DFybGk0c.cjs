@@ -1,5 +1,5 @@
-import { c as commonjsGlobal, g as getDefaultExportFromCjs } from "./index.js";
-import { c as commonjsRequire } from "./_commonjs-dynamic-modules-TGKdzP3c.js";
+"use strict";
+const index$2 = require("./index.cjs");
 function _mergeNamespaces(n, m) {
   for (var i = 0; i < m.length; i++) {
     const e = m[i];
@@ -1212,7 +1212,7 @@ Object.defineProperty(onnxModel, "__esModule", { value: true });
 var onnxValue = {};
 Object.defineProperty(onnxValue, "__esModule", { value: true });
 (function(exports$1) {
-  var __createBinding = commonjsGlobal && commonjsGlobal.__createBinding || (Object.create ? function(o, m, k, k2) {
+  var __createBinding = index$2.commonjsGlobal && index$2.commonjsGlobal.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === void 0) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
     if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
@@ -1225,7 +1225,7 @@ Object.defineProperty(onnxValue, "__esModule", { value: true });
     if (k2 === void 0) k2 = k;
     o[k2] = m[k];
   });
-  var __exportStar = commonjsGlobal && commonjsGlobal.__exportStar || function(m, exports$12) {
+  var __exportStar = index$2.commonjsGlobal && index$2.commonjsGlobal.__exportStar || function(m, exports$12) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports$12, p)) __createBinding(exports$12, m, p);
   };
   Object.defineProperty(exports$1, "__esModule", { value: true });
@@ -1246,7 +1246,7 @@ var binding = {};
   exports$1.initOrt = exports$1.binding = void 0;
   const onnxruntime_common_1 = cjs;
   exports$1.binding = // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-  commonjsRequire(`../bin/napi-v6/${process.platform}/${process.arch}/onnxruntime_binding.node`);
+  require(`../bin/napi-v6/${process.platform}/${process.arch}/onnxruntime_binding.node`);
   let ortInitialized = false;
   const initOrt = () => {
     if (!ortInitialized) {
@@ -1278,13 +1278,13 @@ var binding = {};
   };
   exports$1.initOrt = initOrt;
 })(binding);
-var __classPrivateFieldSet = commonjsGlobal && commonjsGlobal.__classPrivateFieldSet || function(receiver, state, value, kind, f) {
+var __classPrivateFieldSet = index$2.commonjsGlobal && index$2.commonjsGlobal.__classPrivateFieldSet || function(receiver, state, value, kind, f) {
   if (kind === "m") throw new TypeError("Private method is not writable");
   if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
   return kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
 };
-var __classPrivateFieldGet = commonjsGlobal && commonjsGlobal.__classPrivateFieldGet || function(receiver, state, kind, f) {
+var __classPrivateFieldGet = index$2.commonjsGlobal && index$2.commonjsGlobal.__classPrivateFieldGet || function(receiver, state, kind, f) {
   if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
   return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
@@ -1412,7 +1412,7 @@ Object.defineProperty(version, "__esModule", { value: true });
 version.version = void 0;
 version.version = "1.23.2";
 (function(exports$1) {
-  var __createBinding = commonjsGlobal && commonjsGlobal.__createBinding || (Object.create ? function(o, m, k, k2) {
+  var __createBinding = index$2.commonjsGlobal && index$2.commonjsGlobal.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === void 0) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
     if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
@@ -1425,7 +1425,7 @@ version.version = "1.23.2";
     if (k2 === void 0) k2 = k;
     o[k2] = m[k];
   });
-  var __exportStar = commonjsGlobal && commonjsGlobal.__exportStar || function(m, exports$12) {
+  var __exportStar = index$2.commonjsGlobal && index$2.commonjsGlobal.__exportStar || function(m, exports$12) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports$12, p)) __createBinding(exports$12, m, p);
   };
   Object.defineProperty(exports$1, "__esModule", { value: true });
@@ -1444,11 +1444,9 @@ version.version = "1.23.2";
   }
   Object.defineProperty(onnxruntime_common_1.env.versions, "node", { value: version_1.version, enumerable: true });
 })(dist);
-const index = /* @__PURE__ */ getDefaultExportFromCjs(dist);
+const index = /* @__PURE__ */ index$2.getDefaultExportFromCjs(dist);
 const index$1 = /* @__PURE__ */ _mergeNamespaces({
   __proto__: null,
   default: index
 }, [dist]);
-export {
-  index$1 as i
-};
+exports.index = index$1;

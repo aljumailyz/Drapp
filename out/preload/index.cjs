@@ -44,6 +44,18 @@ const api = {
   libraryStats: () => electron.ipcRenderer.invoke("library/stats"),
   librarySetHidden: (payload) => electron.ipcRenderer.invoke("library/set-hidden", payload),
   libraryDeleteVideo: (payload) => electron.ipcRenderer.invoke("library/delete", payload),
+  librarySelectImportFiles: () => electron.ipcRenderer.invoke("library/select-import-files"),
+  libraryExportVideos: (payload) => electron.ipcRenderer.invoke("library/export-videos", payload),
+  libraryImportVideos: (payload) => electron.ipcRenderer.invoke("library/import-videos", payload),
+  onLibraryImportExportEvent: (listener) => {
+    const handler = (_event, payload) => {
+      listener(payload);
+    };
+    electron.ipcRenderer.on("library/import-export-event", handler);
+    return () => {
+      electron.ipcRenderer.removeListener("library/import-export-event", handler);
+    };
+  },
   onLibraryScanProgress: (listener) => {
     const handler = (_event, payload) => {
       listener(payload);

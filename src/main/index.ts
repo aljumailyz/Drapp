@@ -35,9 +35,10 @@ const appLogger = new Logger('App')
 const updaterLogger = new Logger('AutoUpdater')
 
 function createWindow(): void {
+  const preloadCjs = join(__dirname, '../preload/index.cjs')
   const preloadJs = join(__dirname, '../preload/index.js')
   const preloadMjs = join(__dirname, '../preload/index.mjs')
-  const preloadPath = existsSync(preloadJs) ? preloadJs : preloadMjs
+  const preloadPath = existsSync(preloadCjs) ? preloadCjs : existsSync(preloadJs) ? preloadJs : preloadMjs
 
   mainWindow = new BrowserWindow({
     width: 1200,

@@ -1,34 +1,53 @@
-import require$$1$4, { app, ipcMain, BrowserWindow, dialog, shell, safeStorage, clipboard, protocol, net } from "electron";
-import { join, basename, extname, dirname, parse as parse$7, relative } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { mkdir as mkdir$4, writeFile as writeFile$1, unlink, stat as stat$5, readdir, readFile as readFile$1, open, rm, access, chmod, rename as rename$2, appendFile, watch, constants as constants$4, copyFile as copyFile$2 } from "node:fs/promises";
-import { existsSync, statSync, mkdirSync, accessSync, constants as constants$3, createWriteStream, readFileSync as readFileSync$1, watch as watch$1 } from "node:fs";
-import Database from "better-sqlite3";
-import { randomUUID, randomFillSync, createHash } from "node:crypto";
-import { execSync, spawn, execFile, exec } from "node:child_process";
-import { promisify } from "node:util";
-import os$1, { platform as platform$1, arch } from "node:os";
-import require$$1 from "fs";
-import require$$0 from "constants";
-import require$$0$1 from "stream";
-import require$$4 from "util";
-import require$$5 from "assert";
-import require$$1$1 from "path";
-import require$$1$5 from "child_process";
-import require$$0$2 from "events";
-import require$$0$3 from "crypto";
-import require$$1$2 from "tty";
-import require$$2 from "os";
-import require$$4$1 from "url";
-import require$$1$3 from "string_decoder";
-import require$$14 from "zlib";
-import require$$4$2 from "http";
-import __cjs_url__ from "node:url";
-import __cjs_path__ from "node:path";
-import __cjs_mod__ from "node:module";
-const __filename = __cjs_url__.fileURLToPath(import.meta.url);
-const __dirname = __cjs_path__.dirname(__filename);
-const require2 = __cjs_mod__.createRequire(import.meta.url);
+"use strict";
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+const require$$1 = require("electron");
+const require$$0 = require("node:path");
+const node_url = require("node:url");
+const promises = require("node:fs/promises");
+const node_fs = require("node:fs");
+const Database = require("better-sqlite3");
+const require$$1$1 = require("node:crypto");
+const require$$0$1 = require("node:child_process");
+const promises$1 = require("node:stream/promises");
+const require$$0$2 = require("node:util");
+const os$1 = require("node:os");
+const require$$1$2 = require("fs");
+const require$$0$3 = require("constants");
+const require$$0$4 = require("stream");
+const require$$4 = require("util");
+const require$$5 = require("assert");
+const require$$1$3 = require("path");
+const require$$1$6 = require("child_process");
+const require$$0$5 = require("events");
+const require$$0$6 = require("crypto");
+const require$$1$4 = require("tty");
+const require$$2 = require("os");
+const require$$4$1 = require("url");
+const require$$1$5 = require("string_decoder");
+const require$$14 = require("zlib");
+const require$$4$2 = require("http");
 const schema$1 = `
 -- Core videos table
 CREATE TABLE IF NOT EXISTS videos (
@@ -247,13 +266,13 @@ CREATE INDEX IF NOT EXISTS idx_tag_events_video ON tag_events(video_id);
 CREATE INDEX IF NOT EXISTS idx_tag_events_created ON tag_events(created_at);
 `;
 function getAppDataPath() {
-  return app.getPath("userData");
+  return require$$1.app.getPath("userData");
 }
 function getDatabasePath() {
-  return join(getAppDataPath(), "drapp.sqlite");
+  return require$$0.join(getAppDataPath(), "drapp.sqlite");
 }
 function getDownloadPath() {
-  return app.getPath("downloads");
+  return require$$1.app.getPath("downloads");
 }
 let db = null;
 function getDatabase() {
@@ -406,9 +425,9 @@ function findInSystemPath(name) {
     return null;
   }
   try {
-    const result = execSync(`which ${name}`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    const result = require$$0$1.execSync(`which ${name}`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     const path2 = result.trim();
-    if (path2 && existsSync(path2)) {
+    if (path2 && node_fs.existsSync(path2)) {
       return path2;
     }
   } catch {
@@ -422,17 +441,17 @@ function findInSystemPath(name) {
     // Linux Homebrew
   ];
   for (const path2 of commonPaths) {
-    if (existsSync(path2)) {
+    if (node_fs.existsSync(path2)) {
       return path2;
     }
   }
   return null;
 }
 function resolveBundledBinary(name) {
-  const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
+  const resourcesPath = require$$1.app.isPackaged ? process.resourcesPath : require$$0.join(require$$1.app.getAppPath(), "resources");
   const binaryName = process.platform === "win32" ? `${name}.exe` : name;
-  const bundledPath = join(resourcesPath, "bin", platformDir(), binaryName);
-  if (existsSync(bundledPath)) {
+  const bundledPath = require$$0.join(resourcesPath, "bin", platformDir(), binaryName);
+  if (node_fs.existsSync(bundledPath)) {
     return bundledPath;
   }
   if (process.platform !== "win32") {
@@ -444,12 +463,12 @@ function resolveBundledBinary(name) {
   return bundledPath;
 }
 function getBundledBinaryDir() {
-  const resourcesPath = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
-  return join(resourcesPath, "bin", platformDir());
+  const resourcesPath = require$$1.app.isPackaged ? process.resourcesPath : require$$0.join(require$$1.app.getAppPath(), "resources");
+  return require$$0.join(resourcesPath, "bin", platformDir());
 }
 function isBinaryAvailable(name) {
   const path2 = resolveBundledBinary(name);
-  return existsSync(path2);
+  return node_fs.existsSync(path2);
 }
 function detectFasterWhisper() {
   const cliTools = [
@@ -460,7 +479,7 @@ function detectFasterWhisper() {
   ];
   for (const tool of cliTools) {
     try {
-      execSync(`${tool} --help`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      require$$0$1.execSync(`${tool} --help`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
       return { available: true, command: [tool] };
     } catch {
     }
@@ -538,7 +557,7 @@ class MetadataService {
     const binaryPath = resolveBundledBinary("ffprobe");
     const args = ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", request.filePath];
     const raw = await new Promise((resolve, reject) => {
-      const child = spawn(binaryPath, args, { stdio: "pipe" });
+      const child = require$$0$1.spawn(binaryPath, args, { stdio: "pipe" });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (chunk) => {
@@ -603,7 +622,7 @@ class MetadataService {
   }
   statSize(filePath) {
     try {
-      return statSync(filePath).size;
+      return node_fs.statSync(filePath).size;
     } catch {
       return null;
     }
@@ -682,7 +701,7 @@ class DownloadWorker {
       this.markJob(currentJob.id, "running");
       this.markDownload(currentPayload.downloadId, "downloading");
       if (currentPayload.outputDir) {
-        mkdirSync(currentPayload.outputDir, { recursive: true });
+        node_fs.mkdirSync(currentPayload.outputDir, { recursive: true });
       }
       this.logger.info("processing download", { jobId: currentJob.id, downloadId: currentPayload.downloadId });
       const session = this.resolveSession(currentPayload.url);
@@ -696,7 +715,7 @@ class DownloadWorker {
       const downloadId = currentPayload.downloadId;
       const result = await this.service.download({
         url: currentPayload.url,
-        outputPath: currentPayload.outputDir ? join(currentPayload.outputDir, "%(title)s.%(ext)s") : void 0,
+        outputPath: currentPayload.outputDir ? require$$0.join(currentPayload.outputDir, "%(title)s.%(ext)s") : void 0,
         cookiesPath: cookiesPath ?? void 0,
         headers,
         proxy,
@@ -843,20 +862,20 @@ class DownloadWorker {
     }
   }
   cookieFilePath(downloadId) {
-    return join(getAppDataPath(), "auth", `cookies-${downloadId}.txt`);
+    return require$$0.join(getAppDataPath(), "auth", `cookies-${downloadId}.txt`);
   }
   async writeCookieFile(cookies, downloadId) {
-    const dir = join(getAppDataPath(), "auth");
-    await mkdir$4(dir, { recursive: true });
+    const dir = require$$0.join(getAppDataPath(), "auth");
+    await promises.mkdir(dir, { recursive: true });
     const path2 = this.cookieFilePath(downloadId);
     const content = this.serializeCookies(cookies);
-    await writeFile$1(path2, content, "utf-8");
+    await promises.writeFile(path2, content, "utf-8");
     return path2;
   }
   async cleanupCookieFile(downloadId) {
     const path2 = this.cookieFilePath(downloadId);
     try {
-      await unlink(path2);
+      await promises.unlink(path2);
     } catch {
     }
   }
@@ -902,8 +921,8 @@ class DownloadWorker {
       return;
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    const fileName = result.fileName ?? basename(result.outputPath);
-    const title = fileName.replace(new RegExp(`${extname(fileName)}$`), "");
+    const fileName = result.fileName ?? require$$0.basename(result.outputPath);
+    const title = fileName.replace(new RegExp(`${require$$0.extname(fileName)}$`), "");
     this.db.prepare(
       "INSERT INTO videos (id, file_path, file_name, title, source_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET file_path = ?, file_name = ?, title = ?, source_url = ?, updated_at = ?"
     ).run(
@@ -926,7 +945,7 @@ class DownloadWorker {
     try {
       const metadata = await this.metadata.extract({ filePath });
       const now = (/* @__PURE__ */ new Date()).toISOString();
-      const folderPath = dirname(filePath);
+      const folderPath = require$$0.dirname(filePath);
       this.db.prepare(
         "UPDATE videos SET file_size = ?, duration = ?, width = ?, height = ?, fps = ?, codec = ?, container = ?, bitrate = ?, folder_path = ?, updated_at = ? WHERE id = ?"
       ).run(
@@ -1076,7 +1095,7 @@ class TranscodeWorker {
       const abortController = new AbortController();
       this.activeJobId = job.id;
       this.activeAbort = abortController;
-      mkdirSync(dirname(job.output_path), { recursive: true });
+      node_fs.mkdirSync(require$$0.dirname(job.output_path), { recursive: true });
       const jobId = job.id;
       this.logger.info("processing transcode", { jobId });
       let lastProgress = 0;
@@ -1317,7 +1336,7 @@ class TranscriptionWorker {
       const result = await this.service.transcribe({
         audioPath: job.input_path,
         modelPath,
-        outputDir: job.output_path ? dirname(job.output_path) : void 0,
+        outputDir: job.output_path ? require$$0.dirname(job.output_path) : void 0,
         language: config?.language,
         signal: abortController.signal,
         onLog: (chunk) => {
@@ -1448,9 +1467,9 @@ class TranscriptionWorker {
     return row?.id ?? null;
   }
   createVideo(filePath) {
-    const id = randomUUID();
-    const fileName = basename(filePath);
-    const title = fileName.replace(new RegExp(`${extname(fileName)}$`), "");
+    const id = require$$1$1.randomUUID();
+    const fileName = require$$0.basename(filePath);
+    const title = fileName.replace(new RegExp(`${require$$0.extname(fileName)}$`), "");
     const now = (/* @__PURE__ */ new Date()).toISOString();
     this.db.prepare("INSERT INTO videos (id, file_path, file_name, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, filePath, fileName, title, now, now);
     return id;
@@ -1475,7 +1494,7 @@ class TranscriptionWorker {
   }
   async safeTranscriptMeta(outputPath, transcript) {
     try {
-      const info = await stat$5(outputPath);
+      const info = await promises.stat(outputPath);
       return { transcriptLength: transcript.length, outputSize: info.size };
     } catch {
       return { transcriptLength: transcript.length, outputSize: null };
@@ -1483,7 +1502,7 @@ class TranscriptionWorker {
   }
   resolveCaptionPath(outputPath) {
     const vttPath = outputPath.replace(/\.txt$/i, ".vtt");
-    if (vttPath !== outputPath && existsSync(vttPath)) {
+    if (vttPath !== outputPath && node_fs.existsSync(vttPath)) {
       return vttPath;
     }
     return null;
@@ -1517,7 +1536,7 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
     }
     return { exists: false, source: null };
   };
-  ipcMain.handle("download/start", async (_event, url) => {
+  require$$1.ipcMain.handle("download/start", async (_event, url) => {
     const trimmed = url?.trim();
     if (!trimmed) {
       return { ok: false, error: "invalid_url" };
@@ -1529,8 +1548,8 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
         return { ok: false, error: duplicate.source === "videos" ? "already_downloaded" : "already_queued" };
       }
     }
-    const downloadId = randomUUID();
-    const jobId = randomUUID();
+    const downloadId = require$$1$1.randomUUID();
+    const jobId = require$$1$1.randomUUID();
     const createdAt = (/* @__PURE__ */ new Date()).toISOString();
     const outputDir = getSetting(db2, "download_path") ?? getDownloadPath();
     db2.prepare(
@@ -1547,13 +1566,13 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
     });
     return { ok: true, downloadId, jobId, status: "queued" };
   });
-  ipcMain.handle("download/list", async () => {
+  require$$1.ipcMain.handle("download/list", async () => {
     const rows = db2.prepare(
       "SELECT id, url, job_id, status, created_at, progress, speed, eta, output_path, updated_at, error_message, video_id FROM downloads ORDER BY created_at DESC"
     ).all();
     return { ok: true, downloads: rows };
   });
-  ipcMain.handle("download/cancel", async (_event, downloadId) => {
+  require$$1.ipcMain.handle("download/cancel", async (_event, downloadId) => {
     const row = db2.prepare("SELECT id, job_id, status FROM downloads WHERE id = ?").get(downloadId);
     if (!row) {
       return { ok: false, error: "not_found" };
@@ -1581,7 +1600,7 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
     }
     return { ok: true, status: "canceled" };
   });
-  ipcMain.handle("download/retry", async (_event, downloadId) => {
+  require$$1.ipcMain.handle("download/retry", async (_event, downloadId) => {
     const row = db2.prepare("SELECT id, url, status FROM downloads WHERE id = ?").get(downloadId);
     if (!row) {
       return { ok: false, error: "not_found" };
@@ -1589,7 +1608,7 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
     if (!["failed", "canceled"].includes(row.status)) {
       return { ok: false, error: "not_retryable" };
     }
-    const jobId = randomUUID();
+    const jobId = require$$1$1.randomUUID();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const outputDir = getSetting(db2, "download_path") ?? getDownloadPath();
     db2.prepare(
@@ -1606,7 +1625,7 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
     });
     return { ok: true, jobId, status: "queued" };
   });
-  ipcMain.handle("download/batch", async (_event, payload) => {
+  require$$1.ipcMain.handle("download/batch", async (_event, payload) => {
     if (!payload || !Array.isArray(payload.urls)) {
       return { ok: false, queued: 0, skipped: 0, failed: 0, results: [], error: "invalid_payload" };
     }
@@ -1646,8 +1665,8 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
         }
       }
       try {
-        const downloadId = randomUUID();
-        const jobId = randomUUID();
+        const downloadId = require$$1$1.randomUUID();
+        const jobId = require$$1$1.randomUUID();
         const createdAt = (/* @__PURE__ */ new Date()).toISOString();
         insertStmt.run(downloadId, trimmed, jobId, "queued", 0, null, null, null, "yt-dlp", createdAt, createdAt, null);
         queue.enqueue({
@@ -1672,6 +1691,320 @@ function registerDownloadHandlers({ downloadWorker: downloadWorker2 } = {}) {
     }
     return { ok: true, queued, skipped, failed, results };
   });
+}
+const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024;
+class ImportExportService {
+  constructor(db2, metadata) {
+    this.db = db2;
+    this.metadata = metadata;
+    this.videoExtensions = /* @__PURE__ */ new Set([
+      ".mp4",
+      ".mkv",
+      ".mov",
+      ".webm",
+      ".avi",
+      ".flv",
+      ".m4v",
+      ".wmv",
+      ".mpg",
+      ".mpeg"
+    ]);
+  }
+  async exportVideos(request, onProgress) {
+    const { videoIds, destinationDir } = request;
+    let exportedCount = 0;
+    let failedCount = 0;
+    const errors = [];
+    for (let i = 0; i < videoIds.length; i++) {
+      const videoId = videoIds[i];
+      try {
+        const video = this.db.prepare(
+          `SELECT id, file_path, file_name, title, transcript, summary, source_url, source_platform
+             FROM videos WHERE id = ?`
+        ).get(videoId);
+        if (!video) {
+          throw new Error("Video not found in database");
+        }
+        if (!node_fs.existsSync(video.file_path)) {
+          throw new Error("Video file not found on disk");
+        }
+        const fileName = video.file_name ?? require$$0.basename(video.file_path);
+        onProgress?.({
+          current: i + 1,
+          total: videoIds.length,
+          currentFile: fileName,
+          status: "copying"
+        });
+        let destVideoPath = require$$0.join(destinationDir, fileName);
+        let counter = 1;
+        while (node_fs.existsSync(destVideoPath)) {
+          const parsed = require$$0.parse(fileName);
+          destVideoPath = require$$0.join(destinationDir, `${parsed.name}_${counter}${parsed.ext}`);
+          counter++;
+        }
+        const fileInfo = await promises.stat(video.file_path);
+        if (fileInfo.size > LARGE_FILE_THRESHOLD) {
+          await this.copyFileWithStreams(video.file_path, destVideoPath);
+        } else {
+          await promises.copyFile(video.file_path, destVideoPath);
+        }
+        onProgress?.({
+          current: i + 1,
+          total: videoIds.length,
+          currentFile: fileName,
+          status: "metadata"
+        });
+        const metadata = await this.buildMetadataBundle(videoId);
+        const destFileName = require$$0.basename(destVideoPath);
+        const metaPath = require$$0.join(destinationDir, `${require$$0.parse(destFileName).name}.drapp-meta.json`);
+        await promises.writeFile(metaPath, JSON.stringify(metadata, null, 2), "utf-8");
+        exportedCount++;
+        console.info("Exported video", { videoId, destVideoPath });
+      } catch (error2) {
+        failedCount++;
+        const errorMessage2 = error2 instanceof Error ? error2.message : "Unknown error";
+        errors.push({ videoId, error: errorMessage2 });
+        console.warn("Failed to export video", { videoId, error: errorMessage2 });
+      }
+    }
+    onProgress?.({
+      current: videoIds.length,
+      total: videoIds.length,
+      currentFile: "",
+      status: "complete"
+    });
+    console.info("Export completed", { exportedCount, failedCount });
+    return { exportedCount, failedCount, errors };
+  }
+  async importVideos(request, onProgress) {
+    const { filePaths, libraryDir } = request;
+    console.info("Starting import", { count: filePaths.length, libraryDir });
+    if (!node_fs.existsSync(libraryDir)) {
+      node_fs.mkdirSync(libraryDir, { recursive: true });
+    }
+    let importedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    const errors = [];
+    for (let i = 0; i < filePaths.length; i++) {
+      const filePath = filePaths[i];
+      const fileName = require$$0.basename(filePath);
+      try {
+        const ext = require$$0.extname(filePath).toLowerCase();
+        if (!this.videoExtensions.has(ext)) {
+          throw new Error(`Unsupported video format: ${ext}`);
+        }
+        onProgress?.({
+          current: i + 1,
+          total: filePaths.length,
+          currentFile: fileName,
+          status: "copying"
+        });
+        let destPath = require$$0.join(libraryDir, fileName);
+        if (node_fs.existsSync(destPath)) {
+          if (filePath === destPath) {
+            skippedCount++;
+            continue;
+          }
+          let counter = 1;
+          while (node_fs.existsSync(destPath)) {
+            const parsed = require$$0.parse(fileName);
+            destPath = require$$0.join(libraryDir, `${parsed.name}_${counter}${parsed.ext}`);
+            counter++;
+          }
+        }
+        const fileInfo = await promises.stat(filePath);
+        if (fileInfo.size > LARGE_FILE_THRESHOLD) {
+          await this.copyFileWithStreams(filePath, destPath);
+        } else {
+          await promises.copyFile(filePath, destPath);
+        }
+        onProgress?.({
+          current: i + 1,
+          total: filePaths.length,
+          currentFile: fileName,
+          status: "metadata"
+        });
+        await this.indexSingleFile(destPath);
+        await this.tryRestoreMetadata(filePath, destPath);
+        importedCount++;
+        console.info("Imported video", { filePath, destPath });
+      } catch (error2) {
+        failedCount++;
+        const errorMessage2 = error2 instanceof Error ? error2.message : "Unknown error";
+        errors.push({ filePath, error: errorMessage2 });
+        console.warn("Failed to import video", { filePath, error: errorMessage2 });
+      }
+    }
+    onProgress?.({
+      current: filePaths.length,
+      total: filePaths.length,
+      currentFile: "",
+      status: "complete"
+    });
+    console.info("Import completed", { importedCount, skippedCount, failedCount });
+    return { importedCount, skippedCount, failedCount, errors };
+  }
+  async buildMetadataBundle(videoId) {
+    const video = this.db.prepare(
+      `SELECT title, transcript, summary, source_url, source_platform
+         FROM videos WHERE id = ?`
+    ).get(videoId);
+    const tags = this.db.prepare(
+      `SELECT t.name, vt.source, vt.confidence, vt.is_locked
+         FROM video_tags vt
+         JOIN tags t ON t.id = vt.tag_id
+         WHERE vt.video_id = ?`
+    ).all(videoId);
+    return {
+      version: 1,
+      title: video.title,
+      transcript: video.transcript,
+      summary: video.summary,
+      tags: tags.map((t2) => ({
+        name: t2.name,
+        source: t2.source,
+        confidence: t2.confidence,
+        is_locked: Boolean(t2.is_locked)
+      })),
+      source_url: video.source_url,
+      source_platform: video.source_platform
+    };
+  }
+  async tryRestoreMetadata(sourceFilePath, destFilePath) {
+    const sourceDir = require$$0.dirname(sourceFilePath);
+    const sourceBaseName = require$$0.parse(require$$0.basename(sourceFilePath)).name;
+    const metaPath = require$$0.join(sourceDir, `${sourceBaseName}.drapp-meta.json`);
+    if (!node_fs.existsSync(metaPath)) {
+      return;
+    }
+    try {
+      const raw = await promises.readFile(metaPath, "utf-8");
+      const metadata = JSON.parse(raw);
+      if (metadata.version !== 1) {
+        console.warn("Unsupported metadata version", { version: metadata.version });
+        return;
+      }
+      const video = this.db.prepare("SELECT id FROM videos WHERE file_path = ?").get(destFilePath);
+      if (video) {
+        await this.restoreMetadataBundle(video.id, metadata);
+        console.info("Restored metadata for video", { videoId: video.id });
+      }
+    } catch (error2) {
+      console.warn("Failed to restore metadata", { metaPath, error: error2 });
+    }
+  }
+  async restoreMetadataBundle(videoId, metadata) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    this.db.prepare(
+      `UPDATE videos SET
+          title = COALESCE(?, title),
+          transcript = COALESCE(?, transcript),
+          summary = COALESCE(?, summary),
+          source_url = COALESCE(?, source_url),
+          source_platform = COALESCE(?, source_platform),
+          updated_at = ?
+        WHERE id = ?`
+    ).run(
+      metadata.title,
+      metadata.transcript,
+      metadata.summary,
+      metadata.source_url,
+      metadata.source_platform,
+      now,
+      videoId
+    );
+    for (const tag of metadata.tags) {
+      this.db.prepare(
+        `INSERT INTO tags (name, section, created_at)
+           VALUES (?, 'imported', ?)
+           ON CONFLICT(name) DO NOTHING`
+      ).run(tag.name, now);
+      const tagRow = this.db.prepare("SELECT id FROM tags WHERE name = ?").get(tag.name);
+      this.db.prepare(
+        `INSERT INTO video_tags (id, video_id, tag_id, source, confidence, is_locked, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(video_id, tag_id) DO UPDATE SET
+             source = excluded.source,
+             confidence = excluded.confidence,
+             is_locked = excluded.is_locked,
+             updated_at = excluded.updated_at`
+      ).run(
+        require$$1$1.randomUUID(),
+        videoId,
+        tagRow.id,
+        tag.source,
+        tag.confidence,
+        tag.is_locked ? 1 : 0,
+        now,
+        now
+      );
+    }
+  }
+  async indexSingleFile(filePath) {
+    const fileName = require$$0.basename(filePath);
+    const folderPath = require$$0.dirname(filePath);
+    const title = fileName.replace(/\.[^.]+$/, "");
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const existing = this.db.prepare("SELECT id FROM videos WHERE file_path = ?").get(filePath);
+    if (existing) {
+      return;
+    }
+    let metadata = {
+      duration: null,
+      width: null,
+      height: null,
+      fps: null,
+      codec: null,
+      container: null,
+      bitrate: null,
+      fileSize: null
+    };
+    try {
+      metadata = await this.metadata.extract({ filePath });
+      if (!metadata.fileSize) {
+        const fileInfo = await promises.stat(filePath);
+        metadata.fileSize = fileInfo.size;
+      }
+    } catch (error2) {
+      console.warn("Metadata extraction failed during import", { filePath, error: error2 });
+      try {
+        const fileInfo = await promises.stat(filePath);
+        metadata.fileSize = fileInfo.size;
+      } catch {
+      }
+    }
+    this.db.prepare(
+      `INSERT INTO videos (
+          id, file_path, file_name, file_size, duration, width, height, fps,
+          codec, container, bitrate, title, folder_path, created_at, updated_at
+        ) VALUES (
+          @id, @file_path, @file_name, @file_size, @duration, @width, @height, @fps,
+          @codec, @container, @bitrate, @title, @folder_path, @created_at, @updated_at
+        )`
+    ).run({
+      id: require$$1$1.randomUUID(),
+      file_path: filePath,
+      file_name: fileName,
+      file_size: metadata.fileSize,
+      duration: metadata.duration,
+      width: metadata.width,
+      height: metadata.height,
+      fps: metadata.fps,
+      codec: metadata.codec,
+      container: metadata.container,
+      bitrate: metadata.bitrate,
+      title,
+      folder_path: folderPath,
+      created_at: now,
+      updated_at: now
+    });
+  }
+  async copyFileWithStreams(src2, dest) {
+    const readStream = node_fs.createReadStream(src2);
+    const writeStream = node_fs.createWriteStream(dest);
+    await promises$1.pipeline(readStream, writeStream);
+  }
 }
 class ScannerService {
   constructor(db2, metadata) {
@@ -1786,8 +2119,8 @@ class ScannerService {
       }
       try {
         const now = (/* @__PURE__ */ new Date()).toISOString();
-        const fileName = basename(filePath);
-        const folderPath = dirname(filePath);
+        const fileName = require$$0.basename(filePath);
+        const folderPath = require$$0.dirname(filePath);
         const title = fileName.replace(/\.[^.]+$/, "");
         const existing = selectStmt.get(filePath);
         if (existing) {
@@ -1809,7 +2142,7 @@ class ScannerService {
           updated += 1;
         } else {
           insertStmt.run({
-            id: randomUUID(),
+            id: require$$1$1.randomUUID(),
             file_path: filePath,
             file_name: fileName,
             file_size: metadata.fileSize,
@@ -1850,7 +2183,7 @@ class ScannerService {
   async walk(root2, files, signal) {
     let entries;
     try {
-      entries = await readdir(root2, { withFileTypes: true });
+      entries = await promises.readdir(root2, { withFileTypes: true });
     } catch (error2) {
       this.logger.warn("Failed to read directory", { root: root2, error: error2 });
       return;
@@ -1859,7 +2192,7 @@ class ScannerService {
       if (signal?.aborted) {
         return;
       }
-      const fullPath = join(root2, entry.name);
+      const fullPath = require$$0.join(root2, entry.name);
       if (entry.isDirectory()) {
         if (this.ignoredDirs.has(entry.name)) {
           continue;
@@ -1871,7 +2204,7 @@ class ScannerService {
         continue;
       }
       if (entry.isFile()) {
-        const ext = extname(entry.name).toLowerCase();
+        const ext = require$$0.extname(entry.name).toLowerCase();
         if (this.videoExtensions.has(ext)) {
           files.push(fullPath);
         }
@@ -1880,7 +2213,7 @@ class ScannerService {
   }
   async safeStatSize(filePath) {
     try {
-      const info = await stat$5(filePath);
+      const info = await promises.stat(filePath);
       return info.size;
     } catch {
       return null;
@@ -1927,22 +2260,22 @@ function registerLibraryHandlers() {
     db2.prepare("UPDATE downloads SET video_id = NULL WHERE video_id = ?").run(videoId);
     db2.prepare("DELETE FROM videos WHERE id = ?").run(videoId);
   };
-  ipcMain.handle("library/select-folder", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("library/select-folder", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openDirectory", "createDirectory"]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
     return { ok: true, path: result.filePaths[0] };
   });
-  ipcMain.handle("library/scan-start", async (event, path2) => {
+  require$$1.ipcMain.handle("library/scan-start", async (event, path2) => {
     if (!path2) {
       return { ok: false, error: "No scan path provided." };
     }
-    const scanId = randomUUID();
+    const scanId = require$$1$1.randomUUID();
     const controller = new AbortController();
     scanControllers.set(scanId, controller);
     const sender = event.sender;
@@ -1974,7 +2307,7 @@ function registerLibraryHandlers() {
     });
     return { ok: true, scanId };
   });
-  ipcMain.handle("library/scan-cancel", async (_event, scanId) => {
+  require$$1.ipcMain.handle("library/scan-cancel", async (_event, scanId) => {
     if (!scanId) {
       return { ok: false, error: "No scan id provided." };
     }
@@ -1985,7 +2318,7 @@ function registerLibraryHandlers() {
     controller.abort();
     return { ok: true };
   });
-  ipcMain.handle("library/scan", async (_event, path2) => {
+  require$$1.ipcMain.handle("library/scan", async (_event, path2) => {
     if (!path2) {
       return { ok: false, error: "No scan path provided." };
     }
@@ -1996,7 +2329,7 @@ function registerLibraryHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Library scan failed." };
     }
   });
-  ipcMain.handle("library/stats", async () => {
+  require$$1.ipcMain.handle("library/stats", async () => {
     const totals = db2.prepare("SELECT COUNT(*) as count, SUM(duration) as totalDuration, SUM(file_size) as totalSize FROM videos").get();
     const hidden = db2.prepare("SELECT COUNT(*) as count FROM private_items WHERE is_hidden = 1").get();
     const downloadRows = db2.prepare("SELECT status, COUNT(*) as count FROM downloads GROUP BY status").all();
@@ -2024,18 +2357,18 @@ function registerLibraryHandlers() {
       }
     };
   });
-  ipcMain.handle("library/select-export-folder", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("library/select-export-folder", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openDirectory", "createDirectory"]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
     return { ok: true, path: result.filePaths[0] };
   });
-  ipcMain.handle("library/export-assets", async (_event, payload) => {
+  require$$1.ipcMain.handle("library/export-assets", async (_event, payload) => {
     if (!payload?.videoId) {
       return { ok: false, error: "missing_video" };
     }
@@ -2043,25 +2376,25 @@ function registerLibraryHandlers() {
     if (!row?.file_path) {
       return { ok: false, error: "video_not_found" };
     }
-    const baseName = row.file_name ? parse$7(row.file_name).name : parse$7(row.file_path).name;
-    const parsedSource = parse$7(row.file_path);
+    const baseName = row.file_name ? require$$0.parse(row.file_name).name : require$$0.parse(row.file_path).name;
+    const parsedSource = require$$0.parse(row.file_path);
     const exportDir = payload.targetDir && payload.targetDir.trim() ? payload.targetDir : parsedSource.dir;
-    const vttPath = join(parsedSource.dir, `${parsedSource.name}.vtt`);
-    if (payload.includeCaptions && !existsSync(vttPath) && !row.transcript) {
+    const vttPath = require$$0.join(parsedSource.dir, `${parsedSource.name}.vtt`);
+    if (payload.includeCaptions && !node_fs.existsSync(vttPath) && !row.transcript) {
       return { ok: false, error: "missing_transcript" };
     }
     try {
       const results = [];
-      const transcriptTarget = join(exportDir, `${baseName}.txt`);
-      const summaryTarget = join(exportDir, `${baseName}.summary.txt`);
-      const metadataTarget = join(exportDir, `${baseName}.metadata.json`);
-      const captionsTarget = join(exportDir, `${baseName}.vtt`);
+      const transcriptTarget = require$$0.join(exportDir, `${baseName}.txt`);
+      const summaryTarget = require$$0.join(exportDir, `${baseName}.summary.txt`);
+      const metadataTarget = require$$0.join(exportDir, `${baseName}.metadata.json`);
+      const captionsTarget = require$$0.join(exportDir, `${baseName}.vtt`);
       if (payload.includeTranscript) {
-        await writeFile$1(transcriptTarget, row.transcript ?? "", "utf-8");
+        await promises.writeFile(transcriptTarget, row.transcript ?? "", "utf-8");
         results.push(transcriptTarget);
       }
       if (payload.includeSummary) {
-        await writeFile$1(summaryTarget, row.summary ?? "", "utf-8");
+        await promises.writeFile(summaryTarget, row.summary ?? "", "utf-8");
         results.push(summaryTarget);
       }
       if (payload.includeMetadata) {
@@ -2072,39 +2405,39 @@ function registerLibraryHandlers() {
           sourcePath: row.file_path,
           duration: row.duration ?? null
         };
-        await writeFile$1(metadataTarget, JSON.stringify(metadata, null, 2), "utf-8");
+        await promises.writeFile(metadataTarget, JSON.stringify(metadata, null, 2), "utf-8");
         results.push(metadataTarget);
       }
       if (payload.includeCaptions) {
-        if (existsSync(vttPath)) {
-          await writeFile$1(captionsTarget, await readFile$1(vttPath, "utf-8"), "utf-8");
+        if (node_fs.existsSync(vttPath)) {
+          await promises.writeFile(captionsTarget, await promises.readFile(vttPath, "utf-8"), "utf-8");
         } else if (row.transcript) {
           const duration = Number.isFinite(row.duration) && row.duration ? row.duration : 300;
           const content = buildSingleCueVtt(row.transcript, duration);
-          await writeFile$1(captionsTarget, content, "utf-8");
+          await promises.writeFile(captionsTarget, content, "utf-8");
         }
         results.push(captionsTarget);
       }
       if (results.length && exportDir) {
-        shell.showItemInFolder(results[0]);
+        require$$1.shell.showItemInFolder(results[0]);
       }
       return { ok: true, files: results, exportDir };
     } catch (error2) {
       return { ok: false, error: error2 instanceof Error ? error2.message : "export_failed" };
     }
   });
-  ipcMain.handle("library/integrity-scan", async () => {
+  require$$1.ipcMain.handle("library/integrity-scan", async () => {
     const videos = db2.prepare("SELECT id, file_path, title, file_name FROM videos").all();
     const downloads = db2.prepare("SELECT id, url, output_path, status FROM downloads WHERE status = 'completed'").all();
     const missingVideos = [];
     for (const video of videos) {
-      if (!video.file_path || !existsSync(video.file_path)) {
+      if (!video.file_path || !node_fs.existsSync(video.file_path)) {
         missingVideos.push(video);
       }
     }
     const missingDownloads = [];
     for (const download of downloads) {
-      if (!download.output_path || !existsSync(download.output_path)) {
+      if (!download.output_path || !node_fs.existsSync(download.output_path)) {
         missingDownloads.push(download);
       }
     }
@@ -2120,7 +2453,7 @@ function registerLibraryHandlers() {
       missingDownloads
     };
   });
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "library/integrity-fix",
     async (_event, payload) => {
       if (!payload) {
@@ -2153,7 +2486,7 @@ function registerLibraryHandlers() {
       return { ok: true, removedVideos, markedDownloads };
     }
   );
-  ipcMain.handle("library/get-playback", async (_event, videoId) => {
+  require$$1.ipcMain.handle("library/get-playback", async (_event, videoId) => {
     if (!videoId) {
       return { ok: false, error: "No video id provided." };
     }
@@ -2163,7 +2496,7 @@ function registerLibraryHandlers() {
     const row = db2.prepare("SELECT position FROM watch_history WHERE video_id = ? ORDER BY watched_at DESC LIMIT 1").get(videoId);
     return { ok: true, position: row?.position ?? 0 };
   });
-  ipcMain.handle("library/save-playback", async (_event, payload) => {
+  require$$1.ipcMain.handle("library/save-playback", async (_event, payload) => {
     if (!payload?.videoId) {
       return { ok: false, error: "No video id provided." };
     }
@@ -2190,7 +2523,7 @@ function registerLibraryHandlers() {
     }
     return { ok: true };
   });
-  ipcMain.handle("library/get-transcript", async (_event, videoId) => {
+  require$$1.ipcMain.handle("library/get-transcript", async (_event, videoId) => {
     if (!videoId) {
       return { ok: false, error: "missing_video" };
     }
@@ -2200,7 +2533,7 @@ function registerLibraryHandlers() {
     }
     return { ok: true, transcript: row.transcript ?? "" };
   });
-  ipcMain.handle("library/update-transcript", async (_event, payload) => {
+  require$$1.ipcMain.handle("library/update-transcript", async (_event, payload) => {
     if (!payload?.videoId) {
       return { ok: false, error: "missing_video" };
     }
@@ -2208,7 +2541,7 @@ function registerLibraryHandlers() {
     const result = db2.prepare("UPDATE videos SET transcript = ?, updated_at = ? WHERE id = ?").run(transcript, (/* @__PURE__ */ new Date()).toISOString(), payload.videoId);
     return result.changes > 0 ? { ok: true } : { ok: false, error: "video_not_found" };
   });
-  ipcMain.handle("library/export-captions", async (_event, payload) => {
+  require$$1.ipcMain.handle("library/export-captions", async (_event, payload) => {
     if (!payload?.videoId) {
       return { ok: false, error: "missing_video" };
     }
@@ -2216,9 +2549,9 @@ function registerLibraryHandlers() {
     if (!row?.file_path) {
       return { ok: false, error: "video_not_found" };
     }
-    const parsed = parse$7(row.file_path);
-    const vttPath = join(parsed.dir, `${parsed.name}.vtt`);
-    if (existsSync(vttPath)) {
+    const parsed = require$$0.parse(row.file_path);
+    const vttPath = require$$0.join(parsed.dir, `${parsed.name}.vtt`);
+    if (node_fs.existsSync(vttPath)) {
       return { ok: true, path: vttPath };
     }
     if (!row.transcript) {
@@ -2226,10 +2559,10 @@ function registerLibraryHandlers() {
     }
     const duration = Number.isFinite(row.duration) && row.duration ? row.duration : 300;
     const content = buildSingleCueVtt(row.transcript, duration);
-    await writeFile$1(vttPath, content, "utf-8");
+    await promises.writeFile(vttPath, content, "utf-8");
     return { ok: true, path: vttPath };
   });
-  ipcMain.handle("library/list", async (_event, includeHidden) => {
+  require$$1.ipcMain.handle("library/list", async (_event, includeHidden) => {
     const hideHidden = isHiddenFolderEnabled();
     const shouldHide = hideHidden && !includeHidden;
     const query = shouldHide ? `SELECT videos.id, videos.file_path, videos.file_name, videos.title, videos.summary, videos.file_size, videos.duration, videos.width, videos.height, videos.codec, videos.container, videos.bitrate, videos.created_at, videos.updated_at,
@@ -2251,7 +2584,7 @@ function registerLibraryHandlers() {
       }))
     };
   });
-  ipcMain.handle("library/set-hidden", async (_event, payload) => {
+  require$$1.ipcMain.handle("library/set-hidden", async (_event, payload) => {
     if (!payload?.videoId) {
       return { ok: false, error: "missing_video" };
     }
@@ -2264,7 +2597,7 @@ function registerLibraryHandlers() {
     }
     return { ok: true };
   });
-  ipcMain.handle("library/delete", async (_event, payload) => {
+  require$$1.ipcMain.handle("library/delete", async (_event, payload) => {
     if (!payload?.videoId) {
       return { ok: false, error: "missing_video" };
     }
@@ -2290,11 +2623,91 @@ function registerLibraryHandlers() {
     db2.prepare("DELETE FROM videos WHERE id = ?").run(payload.videoId);
     return { ok: true, removedPath: row.file_path };
   });
+  const metadataService = new MetadataService();
+  const importExportService = new ImportExportService(db2, metadataService);
+  require$$1.ipcMain.handle("library/select-import-files", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
+    const dialogOptions = {
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        {
+          name: "Video Files",
+          extensions: ["mp4", "mkv", "mov", "webm", "avi", "flv", "m4v", "wmv", "mpg", "mpeg"]
+        }
+      ]
+    };
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    return { ok: true, paths: result.filePaths };
+  });
+  require$$1.ipcMain.handle(
+    "library/export-videos",
+    async (event, payload) => {
+      if (!payload?.videoIds?.length || !payload.destinationDir) {
+        return { ok: false, error: "Missing required parameters" };
+      }
+      const sender = event.sender;
+      try {
+        const result = await importExportService.exportVideos(
+          { videoIds: payload.videoIds, destinationDir: payload.destinationDir },
+          (progress) => {
+            sender.send("library/import-export-event", {
+              operationType: "export",
+              ...progress
+            });
+          }
+        );
+        return {
+          ok: true,
+          exportedCount: result.exportedCount,
+          failedCount: result.failedCount,
+          errors: result.errors
+        };
+      } catch (error2) {
+        return { ok: false, error: error2 instanceof Error ? error2.message : "Export failed" };
+      }
+    }
+  );
+  require$$1.ipcMain.handle(
+    "library/import-videos",
+    async (event, payload) => {
+      if (!payload?.filePaths?.length) {
+        return { ok: false, error: "No files provided" };
+      }
+      const libraryDir = getSetting(db2, "library_import_folder") ?? getSetting(db2, "download_path") ?? getDefaultDownloadPath();
+      const sender = event.sender;
+      try {
+        const result = await importExportService.importVideos(
+          { filePaths: payload.filePaths, libraryDir },
+          (progress) => {
+            sender.send("library/import-export-event", {
+              operationType: "import",
+              ...progress
+            });
+          }
+        );
+        return {
+          ok: true,
+          importedCount: result.importedCount,
+          skippedCount: result.skippedCount,
+          failedCount: result.failedCount,
+          errors: result.errors
+        };
+      } catch (error2) {
+        return { ok: false, error: error2 instanceof Error ? error2.message : "Import failed" };
+      }
+    }
+  );
+}
+function getDefaultDownloadPath() {
+  return require$$1.app.getPath("downloads");
 }
 async function removeFile(filePath, secureDelete) {
   if (!secureDelete) {
     try {
-      await unlink(filePath);
+      await promises.unlink(filePath);
     } catch (error2) {
       if (isMissingFileError(error2)) {
         return;
@@ -2305,7 +2718,7 @@ async function removeFile(filePath, secureDelete) {
   }
   let info;
   try {
-    info = await stat$5(filePath);
+    info = await promises.stat(filePath);
   } catch (error2) {
     if (isMissingFileError(error2)) {
       return;
@@ -2314,7 +2727,7 @@ async function removeFile(filePath, secureDelete) {
   }
   if (info.size <= 0) {
     try {
-      await unlink(filePath);
+      await promises.unlink(filePath);
     } catch (error2) {
       if (isMissingFileError(error2)) {
         return;
@@ -2323,13 +2736,13 @@ async function removeFile(filePath, secureDelete) {
     }
     return;
   }
-  const handle = await open(filePath, "r+");
+  const handle = await promises.open(filePath, "r+");
   const buffer = Buffer.alloc(1024 * 1024);
   let offset = 0;
   try {
     while (offset < info.size) {
       const chunkSize = Math.min(buffer.length, info.size - offset);
-      randomFillSync(buffer, 0, chunkSize);
+      require$$1$1.randomFillSync(buffer, 0, chunkSize);
       await handle.write(buffer, 0, chunkSize, offset);
       offset += chunkSize;
     }
@@ -2338,7 +2751,7 @@ async function removeFile(filePath, secureDelete) {
     await handle.close();
   }
   try {
-    await unlink(filePath);
+    await promises.unlink(filePath);
   } catch (error2) {
     if (isMissingFileError(error2)) {
       return;
@@ -2373,7 +2786,7 @@ class FfmpegService {
     const binaryPath = resolveBundledBinary("ffmpeg");
     this.logger.info("transcode requested", { input: request.inputPath, output: request.outputPath });
     try {
-      accessSync(binaryPath, constants$3.X_OK);
+      node_fs.accessSync(binaryPath, node_fs.constants.X_OK);
     } catch (error2) {
       throw new Error(`ffmpeg not executable at ${binaryPath}`);
     }
@@ -2384,7 +2797,7 @@ class FfmpegService {
         reject(error2);
         return;
       }
-      const child = spawn(
+      const child = require$$0$1.spawn(
         binaryPath,
         ["-y", "-i", request.inputPath, ...request.args, "-progress", "pipe:1", "-nostats", request.outputPath],
         {
@@ -2554,7 +2967,7 @@ const presets = [
     outputExtension: ".mp4"
   }
 ];
-const execFileAsync = promisify(execFile);
+const execFileAsync = require$$0$2.promisify(require$$0$1.execFile);
 async function detectHWAccelerators(ffmpegPath) {
   const platform2 = os$1.platform();
   const available = ["none"];
@@ -2767,8 +3180,8 @@ async function detectWindowsCPUCapabilities(capabilities) {
   } catch {
     console.warn("PowerShell CPU detection failed, using baseline assumptions");
   }
-  const arch2 = os$1.arch();
-  if (arch2 === "arm64") {
+  const arch = os$1.arch();
+  if (arch === "arm64") {
     capabilities.architecture = "arm64";
     capabilities.neon = true;
     capabilities.sse = false;
@@ -2796,8 +3209,8 @@ async function detectLinuxCPUCapabilities(capabilities) {
   const { stdout } = await execFileAsync("cat", ["/proc/cpuinfo"], {
     timeout: 5e3
   });
-  const arch2 = os$1.arch();
-  const isARM = arch2 === "arm64" || arch2 === "aarch64";
+  const arch = os$1.arch();
+  const isARM = arch === "arm64" || arch === "aarch64";
   if (isARM) {
     capabilities.architecture = "arm64";
     const modelMatch = stdout.match(/model name\s*:\s*(.+)/i) || stdout.match(/Hardware\s*:\s*(.+)/i) || stdout.match(/CPU implementer\s*:\s*(.+)/i);
@@ -3217,10 +3630,10 @@ class FrameExtractorService {
       maxFrames: 30,
       sceneChangeThreshold: 0.3,
       minIntervalMs: 1e3,
-      outputDir: join(app.getPath("userData"), "frames", videoId),
+      outputDir: require$$0.join(require$$1.app.getPath("userData"), "frames", videoId),
       ...options
     };
-    await mkdir$4(opts.outputDir, { recursive: true });
+    await promises.mkdir(opts.outputDir, { recursive: true });
     const duration = await this.getVideoDuration(videoPath);
     let frames = await this.extractWithSceneDetection(videoPath, opts);
     if (frames.length < opts.maxFrames / 2) {
@@ -3242,7 +3655,7 @@ class FrameExtractorService {
   }
   async getVideoDuration(videoPath) {
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.ffprobePath, [
+      const proc = require$$0$1.spawn(this.ffprobePath, [
         "-v",
         "quiet",
         "-show_entries",
@@ -3276,7 +3689,7 @@ class FrameExtractorService {
     });
   }
   async extractWithSceneDetection(videoPath, opts) {
-    const outputPattern = join(opts.outputDir, "scene_%04d.jpg");
+    const outputPattern = require$$0.join(opts.outputDir, "scene_%04d.jpg");
     const selectFilter = `select='gt(scene,${opts.sceneChangeThreshold})',scale='min(1280,iw):-2',showinfo`;
     const args = [
       "-i",
@@ -3293,7 +3706,7 @@ class FrameExtractorService {
       outputPattern
     ];
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.ffmpegPath, args);
+      const proc = require$$0$1.spawn(this.ffmpegPath, args);
       const frames = [];
       let frameIndex = 0;
       let stderrBuffer = "";
@@ -3309,7 +3722,7 @@ class FrameExtractorService {
             frames.push({
               index: frameIndex - 1,
               timestampMs: Math.round(timestampSec * 1e3),
-              filePath: join(opts.outputDir, `scene_${String(frameIndex).padStart(4, "0")}.jpg`)
+              filePath: require$$0.join(opts.outputDir, `scene_${String(frameIndex).padStart(4, "0")}.jpg`)
             });
           }
         }
@@ -3339,7 +3752,7 @@ class FrameExtractorService {
         }
       }
       if (tooClose) continue;
-      const outputPath = join(opts.outputDir, `uniform_${String(i).padStart(4, "0")}.jpg`);
+      const outputPath = require$$0.join(opts.outputDir, `uniform_${String(i).padStart(4, "0")}.jpg`);
       try {
         await this.extractSingleFrame(videoPath, timestampMs, outputPath);
         frames.push({
@@ -3357,7 +3770,7 @@ class FrameExtractorService {
   async extractSingleFrame(videoPath, timestampMs, outputPath) {
     const timestampSec = timestampMs / 1e3;
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.ffmpegPath, [
+      const proc = require$$0$1.spawn(this.ffmpegPath, [
         "-ss",
         timestampSec.toFixed(3),
         "-i",
@@ -3389,7 +3802,7 @@ class FrameExtractorService {
   }
   async getVideoMetadata(videoPath) {
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.ffprobePath, [
+      const proc = require$$0$1.spawn(this.ffprobePath, [
         "-v",
         "quiet",
         "-show_entries",
@@ -3433,15 +3846,15 @@ class FrameExtractorService {
     });
   }
   async cleanup(videoId) {
-    const frameDir = join(app.getPath("userData"), "frames", videoId);
+    const frameDir = require$$0.join(require$$1.app.getPath("userData"), "frames", videoId);
     try {
-      await rm(frameDir, { recursive: true, force: true });
+      await promises.rm(frameDir, { recursive: true, force: true });
     } catch (error2) {
       console.warn(`Failed to cleanup frames for ${videoId}:`, error2);
     }
   }
   getFramesDirectory(videoId) {
-    return join(app.getPath("userData"), "frames", videoId);
+    return require$$0.join(require$$1.app.getPath("userData"), "frames", videoId);
   }
 }
 class LMStudioService {
@@ -3604,7 +4017,7 @@ function createLlmProvider(provider, config) {
 function registerProcessingHandlers(deps = {}) {
   const db2 = getDatabase();
   const queue = new QueueManager(db2);
-  ipcMain.handle("processing/presets", async () => {
+  require$$1.ipcMain.handle("processing/presets", async () => {
     return {
       ok: true,
       presets: presets.map((preset) => ({
@@ -3615,8 +4028,8 @@ function registerProcessingHandlers(deps = {}) {
       }))
     };
   });
-  ipcMain.handle("processing/select-input", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("processing/select-input", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openFile"],
       filters: [
@@ -3626,14 +4039,14 @@ function registerProcessingHandlers(deps = {}) {
         }
       ]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
     return { ok: true, path: result.filePaths[0] };
   });
-  ipcMain.handle("processing/select-batch", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("processing/select-batch", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openFile", "multiSelections"],
       filters: [
@@ -3643,13 +4056,13 @@ function registerProcessingHandlers(deps = {}) {
         }
       ]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
     return { ok: true, paths: result.filePaths };
   });
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "processing/transcode",
     async (_event, request) => {
       const inputPath = request.inputPath?.trim();
@@ -3660,10 +4073,10 @@ function registerProcessingHandlers(deps = {}) {
       if (!preset) {
         return { ok: false, error: "missing_preset" };
       }
-      const parsed = parse$7(inputPath);
+      const parsed = require$$0.parse(inputPath);
       const ext = preset.outputExtension ?? (parsed.ext || ".mp4");
-      const outputPath = join(parsed.dir || dirname(inputPath), `${parsed.name}-transcoded${ext}`);
-      const jobId = randomUUID();
+      const outputPath = require$$0.join(parsed.dir || require$$0.dirname(inputPath), `${parsed.name}-transcoded${ext}`);
+      const jobId = require$$1$1.randomUUID();
       queue.enqueue({
         id: jobId,
         type: "transcode",
@@ -3682,7 +4095,7 @@ function registerProcessingHandlers(deps = {}) {
       return { ok: true, jobId, outputPath };
     }
   );
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "processing/transcribe",
     async (_event, request) => {
       const inputPath = request.inputPath?.trim();
@@ -3693,9 +4106,9 @@ function registerProcessingHandlers(deps = {}) {
       if (!modelPath) {
         return { ok: false, error: "missing_model" };
       }
-      const parsed = parse$7(inputPath);
-      const outputPath = join(parsed.dir || dirname(inputPath), `${parsed.name}.txt`);
-      const jobId = randomUUID();
+      const parsed = require$$0.parse(inputPath);
+      const outputPath = require$$0.join(parsed.dir || require$$0.dirname(inputPath), `${parsed.name}.txt`);
+      const jobId = require$$1$1.randomUUID();
       queue.enqueue({
         id: jobId,
         type: "transcription",
@@ -3715,7 +4128,7 @@ function registerProcessingHandlers(deps = {}) {
       return { ok: true, jobId, outputPath };
     }
   );
-  ipcMain.handle("processing/list", async (_event, type2) => {
+  require$$1.ipcMain.handle("processing/list", async (_event, type2) => {
     const jobType = type2 ?? "transcode";
     const rows = db2.prepare(
       "SELECT id, status, input_path, output_path, progress, created_at, updated_at, error_message, log_tail, result_json FROM jobs WHERE type = ? ORDER BY created_at DESC"
@@ -3726,7 +4139,7 @@ function registerProcessingHandlers(deps = {}) {
     }));
     return { ok: true, jobs };
   });
-  ipcMain.handle("processing/details", async (_event, jobId) => {
+  require$$1.ipcMain.handle("processing/details", async (_event, jobId) => {
     if (!jobId) {
       return { ok: false, error: "missing_job_id" };
     }
@@ -3752,7 +4165,7 @@ function registerProcessingHandlers(deps = {}) {
       return null;
     }
   }
-  ipcMain.handle("processing/cancel", async (_event, jobId) => {
+  require$$1.ipcMain.handle("processing/cancel", async (_event, jobId) => {
     if (!jobId) {
       return { ok: false, error: "missing_job_id" };
     }
@@ -3776,7 +4189,7 @@ function registerProcessingHandlers(deps = {}) {
     }
     return { ok: false, error: "worker_unavailable" };
   });
-  ipcMain.handle("processing/detect-hw-accel", async () => {
+  require$$1.ipcMain.handle("processing/detect-hw-accel", async () => {
     try {
       const ffmpegPath = getSetting(db2, "ffmpeg_path") || "ffmpeg";
       const result = await detectHWAccelerators(ffmpegPath);
@@ -3796,7 +4209,7 @@ function registerProcessingHandlers(deps = {}) {
       };
     }
   });
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "processing/preview-command",
     async (_event, request) => {
       const inputPath = request.inputPath?.trim();
@@ -3808,9 +4221,9 @@ function registerProcessingHandlers(deps = {}) {
         return { ok: false, error: "missing_config" };
       }
       try {
-        const parsed = parse$7(inputPath);
-        const dir = parsed.dir || dirname(inputPath);
-        const outputPath = join(dir, `${parsed.name}-encoded.${config.container}`);
+        const parsed = require$$0.parse(inputPath);
+        const dir = parsed.dir || require$$0.dirname(inputPath);
+        const outputPath = require$$0.join(dir, `${parsed.name}-encoded.${config.container}`);
         const args = buildFFmpegArgs(inputPath, outputPath, config);
         return { ok: true, command: args };
       } catch (error2) {
@@ -3821,7 +4234,7 @@ function registerProcessingHandlers(deps = {}) {
       }
     }
   );
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "processing/advanced-transcode",
     async (_event, request) => {
       const inputPath = request.inputPath?.trim();
@@ -3833,11 +4246,11 @@ function registerProcessingHandlers(deps = {}) {
         return { ok: false, error: "missing_config" };
       }
       try {
-        const parsed = parse$7(inputPath);
-        const outputDir = request.outputDir || parsed.dir || dirname(inputPath);
-        const outputPath = join(outputDir, `${parsed.name}-encoded.${config.container}`);
+        const parsed = require$$0.parse(inputPath);
+        const outputDir = request.outputDir || parsed.dir || require$$0.dirname(inputPath);
+        const outputPath = require$$0.join(outputDir, `${parsed.name}-encoded.${config.container}`);
         const ffmpegArgs = buildFFmpegArgs(inputPath, outputPath, config);
-        const jobId = randomUUID();
+        const jobId = require$$1$1.randomUUID();
         queue.enqueue({
           id: jobId,
           type: "transcode",
@@ -3865,7 +4278,7 @@ function registerProcessingHandlers(deps = {}) {
     }
   );
   const metadataService = new MetadataService();
-  ipcMain.handle("processing/probe-video", async (_event, filePath) => {
+  require$$1.ipcMain.handle("processing/probe-video", async (_event, filePath) => {
     if (!filePath?.trim()) {
       return { ok: false, error: "missing_file_path" };
     }
@@ -3892,7 +4305,7 @@ function registerProcessingHandlers(deps = {}) {
     }
   });
   const frameExtractor = new FrameExtractorService();
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "processing/analyze-video-vision",
     async (_event, request) => {
       const videoPath = request.videoPath?.trim();
@@ -3934,7 +4347,7 @@ function registerProcessingHandlers(deps = {}) {
         const validFrames = [];
         for (const frame of frames) {
           try {
-            await access(frame.filePath);
+            await promises.access(frame.filePath);
             validFrames.push(frame);
           } catch {
           }
@@ -3945,7 +4358,7 @@ function registerProcessingHandlers(deps = {}) {
         }
         const imageContents = await Promise.all(
           validFrames.map(async (frame) => {
-            const buffer = await readFile$1(frame.filePath);
+            const buffer = await promises.readFile(frame.filePath);
             const base64 = buffer.toString("base64");
             return {
               type: "image_url",
@@ -4024,7 +4437,7 @@ Format your tags line exactly as: Tags: keyword1, keyword2, keyword3`;
       }
     }
   );
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "processing/generate-thumbnail",
     async (_event, request) => {
       const videoPath = request.videoPath?.trim();
@@ -4033,13 +4446,13 @@ Format your tags line exactly as: Tags: keyword1, keyword2, keyword3`;
         return { ok: false, error: "missing_video_path_or_id" };
       }
       try {
-        await access(videoPath);
-        const thumbDir = join(app.getPath("userData"), "thumbnails");
-        await mkdir$4(thumbDir, { recursive: true });
-        const thumbPath = join(thumbDir, `${videoId}.jpg`);
+        await promises.access(videoPath);
+        const thumbDir = require$$0.join(require$$1.app.getPath("userData"), "thumbnails");
+        await promises.mkdir(thumbDir, { recursive: true });
+        const thumbPath = require$$0.join(thumbDir, `${videoId}.jpg`);
         try {
-          await access(thumbPath);
-          const thumbData2 = await readFile$1(thumbPath);
+          await promises.access(thumbPath);
+          const thumbData2 = await promises.readFile(thumbPath);
           return {
             ok: true,
             thumbnailPath: thumbPath,
@@ -4059,7 +4472,7 @@ Format your tags line exactly as: Tags: keyword1, keyword2, keyword3`;
         const ffmpegPath = resolveBundledBinary("ffmpeg");
         const timestampSec = timestampMs / 1e3;
         await new Promise((resolve, reject) => {
-          const proc = spawn(ffmpegPath, [
+          const proc = require$$0$1.spawn(ffmpegPath, [
             "-ss",
             timestampSec.toFixed(3),
             "-i",
@@ -4088,7 +4501,7 @@ Format your tags line exactly as: Tags: keyword1, keyword2, keyword3`;
           });
           proc.on("error", reject);
         });
-        const thumbData = await readFile$1(thumbPath);
+        const thumbData = await promises.readFile(thumbPath);
         return {
           ok: true,
           thumbnailPath: thumbPath,
@@ -4200,10 +4613,10 @@ Task: Clean up the transcript for readability. Fix punctuation, casing, and line
 }
 function registerLlmHandlers(smartTagging2) {
   const db2 = getDatabase();
-  ipcMain.handle("llm/get-settings", async () => {
+  require$$1.ipcMain.handle("llm/get-settings", async () => {
     return { ok: true, settings: getLlmSettings() };
   });
-  ipcMain.handle("llm/update-settings", async (_event, payload) => {
+  require$$1.ipcMain.handle("llm/update-settings", async (_event, payload) => {
     try {
       if (payload.provider) {
         setSetting(db2, "llm_provider", payload.provider);
@@ -4232,7 +4645,7 @@ function registerLlmHandlers(smartTagging2) {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to update settings" };
     }
   });
-  ipcMain.handle("llm/test-connection", async (_event, provider) => {
+  require$$1.ipcMain.handle("llm/test-connection", async (_event, provider) => {
     const settings = getLlmSettings();
     const target = provider ?? settings.provider;
     if (target === "openrouter") {
@@ -4243,7 +4656,7 @@ function registerLlmHandlers(smartTagging2) {
     const result = await testLmStudio(settings.lmstudio.baseUrl);
     return { ok: true, available: result.available, error: result.error };
   });
-  ipcMain.handle("llm/summarize-video", async (_event, payload) => {
+  require$$1.ipcMain.handle("llm/summarize-video", async (_event, payload) => {
     const videoId = payload?.videoId?.trim();
     if (!videoId) {
       return { ok: false, error: "missing_video" };
@@ -4291,7 +4704,7 @@ function registerLlmHandlers(smartTagging2) {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to generate summary." };
     }
   });
-  ipcMain.handle("llm/cleanup-transcript", async (_event, payload) => {
+  require$$1.ipcMain.handle("llm/cleanup-transcript", async (_event, payload) => {
     const videoId = payload?.videoId?.trim();
     if (!videoId) {
       return { ok: false, error: "missing_video" };
@@ -4333,10 +4746,10 @@ function registerLlmHandlers(smartTagging2) {
 }
 const DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1";
 function registerSmartTaggingHandlers(smartTagging2) {
-  ipcMain.handle("smart-tagging:index-video", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:index-video", async (_event, params) => {
     return smartTagging2.indexVideo(params.videoId, params.videoPath);
   });
-  ipcMain.handle("smart-tagging:suggest-tags", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:suggest-tags", async (_event, params) => {
     return smartTagging2.suggestTags(params.videoId, {
       topK: params.topK,
       useLLMRefinement: params.useLLMRefinement,
@@ -4345,11 +4758,11 @@ function registerSmartTaggingHandlers(smartTagging2) {
       userNotes: params.userNotes
     });
   });
-  ipcMain.handle("smart-tagging:apply-decision", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:apply-decision", async (_event, params) => {
     await smartTagging2.applyTagDecision(params.videoId, params.tagName, params.decision);
     return { success: true };
   });
-  ipcMain.handle("smart-tagging:add-tag", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:add-tag", async (_event, params) => {
     try {
       smartTagging2.addUserTag(params.videoId, params.tagName, params.lock);
       return { success: true };
@@ -4357,10 +4770,10 @@ function registerSmartTaggingHandlers(smartTagging2) {
       return { success: false, error: String(error2) };
     }
   });
-  ipcMain.handle("smart-tagging:remove-tag", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:remove-tag", async (_event, params) => {
     return smartTagging2.removeTag(params.videoId, params.tagName, params.force);
   });
-  ipcMain.handle("smart-tagging:lock-tag", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:lock-tag", async (_event, params) => {
     try {
       smartTagging2.lockTag(params.videoId, params.tagName);
       return { success: true };
@@ -4368,7 +4781,7 @@ function registerSmartTaggingHandlers(smartTagging2) {
       return { success: false, error: String(error2) };
     }
   });
-  ipcMain.handle("smart-tagging:unlock-tag", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:unlock-tag", async (_event, params) => {
     try {
       smartTagging2.unlockTag(params.videoId, params.tagName);
       return { success: true };
@@ -4376,26 +4789,26 @@ function registerSmartTaggingHandlers(smartTagging2) {
       return { success: false, error: String(error2) };
     }
   });
-  ipcMain.handle("smart-tagging:regenerate", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:regenerate", async (_event, params) => {
     return smartTagging2.regenerateSuggestions(params.videoId);
   });
-  ipcMain.handle("smart-tagging:get-taxonomy", async () => {
+  require$$1.ipcMain.handle("smart-tagging:get-taxonomy", async () => {
     return smartTagging2.getTaxonomy();
   });
-  ipcMain.handle("smart-tagging:reload-taxonomy", async () => {
+  require$$1.ipcMain.handle("smart-tagging:reload-taxonomy", async () => {
     return smartTagging2.reloadTaxonomy();
   });
-  ipcMain.handle("smart-tagging:get-video-tags", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:get-video-tags", async (_event, params) => {
     return { tags: smartTagging2.getVideoTags(params.videoId) };
   });
-  ipcMain.handle("smart-tagging:is-indexed", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:is-indexed", async (_event, params) => {
     return smartTagging2.isVideoIndexed(params.videoId);
   });
-  ipcMain.handle("smart-tagging:cleanup", async (_event, params) => {
+  require$$1.ipcMain.handle("smart-tagging:cleanup", async (_event, params) => {
     await smartTagging2.cleanupVideo(params.videoId);
     return { success: true };
   });
-  ipcMain.handle("smart-tagging:llm-available", async () => {
+  require$$1.ipcMain.handle("smart-tagging:llm-available", async () => {
     const db2 = getDatabase();
     const provider = getSetting(db2, "llm_provider") ?? "lmstudio";
     if (provider === "openrouter") {
@@ -4417,7 +4830,7 @@ function registerSmartTaggingHandlers(smartTagging2) {
       return { available: false };
     }
   });
-  ipcMain.handle("smart-tagging:llm-models", async () => {
+  require$$1.ipcMain.handle("smart-tagging:llm-models", async () => {
     const db2 = getDatabase();
     const baseUrl = getSetting(db2, "lmstudio_url") ?? DEFAULT_LMSTUDIO_URL;
     try {
@@ -4463,15 +4876,15 @@ function parseRateLimitMs(value) {
   return Math.round(parsed);
 }
 function hashPin(pin) {
-  return createHash("sha256").update(pin).digest("hex");
+  return require$$1$1.createHash("sha256").update(pin).digest("hex");
 }
 function registerSettingsHandlers(deps = {}) {
   const db2 = getDatabase();
-  ipcMain.handle("settings/get-download-path", async () => {
+  require$$1.ipcMain.handle("settings/get-download-path", async () => {
     const path2 = getSetting(db2, "download_path") ?? getDownloadPath();
     return { ok: true, path: path2 };
   });
-  ipcMain.handle("settings/get-download-settings", async () => {
+  require$$1.ipcMain.handle("settings/get-download-settings", async () => {
     const proxy = getSetting(db2, "download_proxy");
     const rateLimit = getSetting(db2, "download_rate_limit");
     const rateLimitMs = parseRateLimitMs(getSetting(db2, "download_rate_limit_ms"));
@@ -4486,7 +4899,7 @@ function registerSettingsHandlers(deps = {}) {
       }
     };
   });
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "settings/update-download-settings",
     async (_event, payload) => {
       if (!payload) {
@@ -4520,12 +4933,12 @@ function registerSettingsHandlers(deps = {}) {
       };
     }
   );
-  ipcMain.handle("settings/select-download-path", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("settings/select-download-path", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openDirectory", "createDirectory"]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
@@ -4533,11 +4946,11 @@ function registerSettingsHandlers(deps = {}) {
     setSetting(db2, "download_path", selectedPath);
     return { ok: true, path: selectedPath };
   });
-  ipcMain.handle("settings/get-ui-settings", async () => {
+  require$$1.ipcMain.handle("settings/get-ui-settings", async () => {
     const theme = getSetting(db2, "ui_theme") ?? "light";
     return { ok: true, settings: { theme } };
   });
-  ipcMain.handle("settings/update-ui-settings", async (_event, payload) => {
+  require$$1.ipcMain.handle("settings/update-ui-settings", async (_event, payload) => {
     if (!payload) {
       return { ok: false, error: "missing_payload" };
     }
@@ -4548,17 +4961,17 @@ function registerSettingsHandlers(deps = {}) {
     const theme = getSetting(db2, "ui_theme") ?? "light";
     return { ok: true, settings: { theme } };
   });
-  ipcMain.handle("settings/get-watch-folder", async () => {
+  require$$1.ipcMain.handle("settings/get-watch-folder", async () => {
     const enabled = getBooleanSetting(db2, "watch_folder_enabled", false);
     const path2 = getSetting(db2, "watch_folder_path");
     return { ok: true, settings: { enabled, path: path2 && path2.trim() ? path2 : null } };
   });
-  ipcMain.handle("settings/select-watch-folder", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("settings/select-watch-folder", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openDirectory", "createDirectory"]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
@@ -4566,7 +4979,7 @@ function registerSettingsHandlers(deps = {}) {
     setSetting(db2, "watch_folder_path", selectedPath);
     return { ok: true, path: selectedPath };
   });
-  ipcMain.handle("settings/update-watch-folder", async (_event, payload) => {
+  require$$1.ipcMain.handle("settings/update-watch-folder", async (_event, payload) => {
     if (!payload) {
       return { ok: false, error: "missing_payload" };
     }
@@ -4584,16 +4997,16 @@ function registerSettingsHandlers(deps = {}) {
     const path2 = getSetting(db2, "watch_folder_path");
     return { ok: true, settings: { enabled, path: path2 && path2.trim() ? path2 : null } };
   });
-  ipcMain.handle("settings/watch-folder-scan", async () => {
+  require$$1.ipcMain.handle("settings/watch-folder-scan", async () => {
     await deps.watchFolderService?.scanNow();
     return { ok: true };
   });
-  ipcMain.handle("settings/get-whisper-model", async () => {
+  require$$1.ipcMain.handle("settings/get-whisper-model", async () => {
     const path2 = getSetting(db2, "whisper_model_path");
     return { ok: true, path: path2 };
   });
-  ipcMain.handle("settings/select-whisper-model", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("settings/select-whisper-model", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openFile"],
       filters: [
@@ -4603,7 +5016,7 @@ function registerSettingsHandlers(deps = {}) {
         }
       ]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
@@ -4611,12 +5024,12 @@ function registerSettingsHandlers(deps = {}) {
     setSetting(db2, "whisper_model_path", selectedPath);
     return { ok: true, path: selectedPath };
   });
-  ipcMain.handle("settings/get-whisper-provider", async () => {
+  require$$1.ipcMain.handle("settings/get-whisper-provider", async () => {
     const provider = getSetting(db2, "whisper_provider") ?? "bundled";
     const endpoint = getSetting(db2, "whisper_lmstudio_endpoint") ?? "http://localhost:1234/v1/audio/transcriptions";
     return { ok: true, provider, endpoint };
   });
-  ipcMain.handle("settings/set-whisper-provider", async (_event, payload) => {
+  require$$1.ipcMain.handle("settings/set-whisper-provider", async (_event, payload) => {
     if (!payload || !payload.provider) {
       return { ok: false, error: "Invalid payload" };
     }
@@ -4626,9 +5039,9 @@ function registerSettingsHandlers(deps = {}) {
     }
     return { ok: true };
   });
-  ipcMain.handle("settings/get-whisper-gpu", async () => {
-    const currentPlatform = platform$1();
-    const currentArch = arch();
+  require$$1.ipcMain.handle("settings/get-whisper-gpu", async () => {
+    const currentPlatform = os$1.platform();
+    const currentArch = os$1.arch();
     const isAppleSilicon = currentPlatform === "darwin" && currentArch === "arm64";
     let gpuAvailable = false;
     let gpuType = "none";
@@ -4655,11 +5068,11 @@ function registerSettingsHandlers(deps = {}) {
       }
     };
   });
-  ipcMain.handle("settings/set-whisper-gpu", async (_event, enabled) => {
+  require$$1.ipcMain.handle("settings/set-whisper-gpu", async (_event, enabled) => {
     setBooleanSetting(db2, "whisper_gpu_enabled", enabled);
     return { ok: true };
   });
-  ipcMain.handle("settings/get-privacy", async () => {
+  require$$1.ipcMain.handle("settings/get-privacy", async () => {
     const pinHash = getSetting(db2, PRIVACY_PIN_KEY);
     return {
       ok: true,
@@ -4672,7 +5085,7 @@ function registerSettingsHandlers(deps = {}) {
       }
     };
   });
-  ipcMain.handle("settings/update-privacy", async (_event, payload) => {
+  require$$1.ipcMain.handle("settings/update-privacy", async (_event, payload) => {
     if (!payload) {
       return { ok: false, error: "missing_payload" };
     }
@@ -4699,7 +5112,7 @@ function registerSettingsHandlers(deps = {}) {
       }
     };
   });
-  ipcMain.handle("settings/set-privacy-pin", async (_event, pin) => {
+  require$$1.ipcMain.handle("settings/set-privacy-pin", async (_event, pin) => {
     const trimmed = typeof pin === "string" ? pin.trim() : "";
     if (trimmed.length < 4) {
       return { ok: false, error: "Pin must be at least 4 characters." };
@@ -4707,11 +5120,11 @@ function registerSettingsHandlers(deps = {}) {
     setSetting(db2, PRIVACY_PIN_KEY, hashPin(trimmed));
     return { ok: true };
   });
-  ipcMain.handle("settings/clear-privacy-pin", async () => {
+  require$$1.ipcMain.handle("settings/clear-privacy-pin", async () => {
     setSetting(db2, PRIVACY_PIN_KEY, "");
     return { ok: true };
   });
-  ipcMain.handle("settings/verify-privacy-pin", async (_event, pin) => {
+  require$$1.ipcMain.handle("settings/verify-privacy-pin", async (_event, pin) => {
     const stored = getSetting(db2, PRIVACY_PIN_KEY);
     if (!stored) {
       return { ok: true, valid: true };
@@ -4732,7 +5145,7 @@ class CookieService {
   }
   async importCookies(request) {
     this.logger.info("cookie import requested", { platform: request.platform });
-    const raw = await readFile$1(request.filePath, "utf-8");
+    const raw = await promises.readFile(request.filePath, "utf-8");
     const parsed = this.parseCookieFile(raw);
     if (!parsed.cookies.length) {
       throw new Error("No cookies found in the selected file.");
@@ -4741,7 +5154,7 @@ class CookieService {
     const payload = {
       format: parsed.format,
       source: "file",
-      sourceFile: basename(request.filePath),
+      sourceFile: require$$0.basename(request.filePath),
       importedAt: (/* @__PURE__ */ new Date()).toISOString(),
       cookies: parsed.cookies
     };
@@ -4886,14 +5299,14 @@ class KeychainService {
     this.logger = new Logger("KeychainService");
   }
   isEncryptionAvailable() {
-    return safeStorage.isEncryptionAvailable();
+    return require$$1.safeStorage.isEncryptionAvailable();
   }
   async storeSecret(key, value) {
     this.logger.info("keychain store requested", { key });
   }
   encryptToJson(value) {
     if (this.isEncryptionAvailable()) {
-      const payload = safeStorage.encryptString(value).toString("base64");
+      const payload = require$$1.safeStorage.encryptString(value).toString("base64");
       return JSON.stringify({ scheme: "safeStorage", payload });
     }
     this.logger.warn("safeStorage unavailable; storing secrets in plain text");
@@ -4904,7 +5317,7 @@ class KeychainService {
       const parsed = JSON.parse(payload);
       if (parsed.scheme === "safeStorage") {
         const buffer = Buffer.from(parsed.payload, "base64");
-        return safeStorage.decryptString(buffer);
+        return require$$1.safeStorage.decryptString(buffer);
       }
       return parsed.payload;
     } catch (error2) {
@@ -4935,7 +5348,7 @@ class SessionService {
   }
   createSession(params) {
     const platform2 = params.platform.trim().toLowerCase();
-    const id = randomUUID();
+    const id = require$$1$1.randomUUID();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const shouldActivate = params.setActive !== false;
     if (shouldActivate) {
@@ -4999,15 +5412,15 @@ class SessionService {
   }
 }
 function hashPassword(password) {
-  return createHash("sha256").update(password + "drapp_salt_2024").digest("hex");
+  return require$$1$1.createHash("sha256").update(password + "drapp_salt_2024").digest("hex");
 }
 function registerAuthHandlers() {
   const db2 = getDatabase();
   const sessionService = new SessionService(db2);
   const keychainService = new KeychainService();
   const cookieService = new CookieService(sessionService, keychainService);
-  ipcMain.handle("auth/select-cookie-file", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("auth/select-cookie-file", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openFile"],
       filters: [
@@ -5015,13 +5428,13 @@ function registerAuthHandlers() {
         { name: "All files", extensions: ["*"] }
       ]
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
     return { ok: true, path: result.filePaths[0] };
   });
-  ipcMain.handle("auth/import-cookies", async (_event, payload) => {
+  require$$1.ipcMain.handle("auth/import-cookies", async (_event, payload) => {
     const platform2 = payload?.platform?.trim().toLowerCase();
     const filePath = payload?.filePath?.trim();
     if (!platform2 || !filePath) {
@@ -5038,14 +5451,14 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to import cookies." };
     }
   });
-  ipcMain.handle("auth/list-sessions", async () => {
+  require$$1.ipcMain.handle("auth/list-sessions", async () => {
     try {
       return { ok: true, sessions: sessionService.listSessions() };
     } catch (error2) {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to list sessions." };
     }
   });
-  ipcMain.handle("auth/set-active", async (_event, sessionId) => {
+  require$$1.ipcMain.handle("auth/set-active", async (_event, sessionId) => {
     if (!sessionId) {
       return { ok: false, error: "missing_session" };
     }
@@ -5056,7 +5469,7 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to update session." };
     }
   });
-  ipcMain.handle("auth/delete-session", async (_event, sessionId) => {
+  require$$1.ipcMain.handle("auth/delete-session", async (_event, sessionId) => {
     if (!sessionId) {
       return { ok: false, error: "missing_session" };
     }
@@ -5067,7 +5480,7 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to delete session." };
     }
   });
-  ipcMain.handle("app/check-password-set", async () => {
+  require$$1.ipcMain.handle("app/check-password-set", async () => {
     try {
       const passwordHash = getSetting(db2, "app_password_hash");
       const lockEnabled = getSetting(db2, "app_lock_enabled");
@@ -5080,7 +5493,7 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Failed to check password" };
     }
   });
-  ipcMain.handle("app/set-password", async (_event, password) => {
+  require$$1.ipcMain.handle("app/set-password", async (_event, password) => {
     if (!password || password.length < 4) {
       return { ok: false, error: "Password must be at least 4 characters" };
     }
@@ -5093,7 +5506,7 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Failed to set password" };
     }
   });
-  ipcMain.handle("app/verify-password", async (_event, password) => {
+  require$$1.ipcMain.handle("app/verify-password", async (_event, password) => {
     if (!password) {
       return { ok: false, valid: false, error: "Password is required" };
     }
@@ -5109,7 +5522,7 @@ function registerAuthHandlers() {
       return { ok: false, valid: false, error: error2 instanceof Error ? error2.message : "Failed to verify password" };
     }
   });
-  ipcMain.handle("app/change-password", async (_event, payload) => {
+  require$$1.ipcMain.handle("app/change-password", async (_event, payload) => {
     if (!payload.currentPassword || !payload.newPassword) {
       return { ok: false, error: "Both passwords are required" };
     }
@@ -5131,7 +5544,7 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Failed to change password" };
     }
   });
-  ipcMain.handle("app/remove-password", async (_event, password) => {
+  require$$1.ipcMain.handle("app/remove-password", async (_event, password) => {
     if (!password) {
       return { ok: false, error: "Password is required" };
     }
@@ -5150,7 +5563,7 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Failed to remove password" };
     }
   });
-  ipcMain.handle("app/toggle-lock", async (_event, enabled) => {
+  require$$1.ipcMain.handle("app/toggle-lock", async (_event, enabled) => {
     try {
       const passwordHash = getSetting(db2, "app_password_hash");
       if (!passwordHash && enabled) {
@@ -5162,7 +5575,7 @@ function registerAuthHandlers() {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Failed to toggle lock" };
     }
   });
-  ipcMain.handle("app/reset-password", async () => {
+  require$$1.ipcMain.handle("app/reset-password", async () => {
     try {
       db2.exec("BEGIN TRANSACTION");
       try {
@@ -5273,7 +5686,7 @@ class BinaryDownloaderService {
     const missing = [];
     for (const name of binaries) {
       const path2 = resolveBundledBinary(name);
-      if (!existsSync(path2)) {
+      if (!node_fs.existsSync(path2)) {
         missing.push(name);
       }
     }
@@ -5283,7 +5696,7 @@ class BinaryDownloaderService {
     const missing = await this.checkMissingBinaries();
     const results = [];
     const binDir = getBundledBinaryDir();
-    await mkdir$4(binDir, { recursive: true });
+    await promises.mkdir(binDir, { recursive: true });
     missing.includes("ffmpeg") || missing.includes("ffprobe");
     const ffmpegDownloaded = /* @__PURE__ */ new Set();
     for (const binary2 of missing) {
@@ -5331,12 +5744,12 @@ class BinaryDownloaderService {
     return results;
   }
   async downloadBinary(binary2, info, onProgress) {
-    const tempDir = app.getPath("temp");
+    const tempDir = require$$1.app.getPath("temp");
     const targetPath = resolveBundledBinary(binary2);
     if (info.archiveType === "exe") {
       await this.downloadFile(info.url, targetPath, onProgress);
       if (process.platform !== "win32") {
-        await chmod(targetPath, 493);
+        await promises.chmod(targetPath, 493);
       }
       return {};
     }
@@ -5346,7 +5759,7 @@ class BinaryDownloaderService {
       "tar.xz": ".tar.xz"
     };
     const archiveExt = archiveExtMap[info.archiveType] || ".zip";
-    const archivePath = join(tempDir, `drapp-${binary2}${archiveExt}`);
+    const archivePath = require$$0.join(tempDir, `drapp-${binary2}${archiveExt}`);
     const cacheKey = info.url;
     if (!this.downloadCache.has(cacheKey)) {
       this.downloadCache.set(
@@ -5359,7 +5772,7 @@ class BinaryDownloaderService {
     return { archivePath };
   }
   async downloadFile(url, destPath, onProgress) {
-    await mkdir$4(dirname(destPath), { recursive: true });
+    await promises.mkdir(require$$0.dirname(destPath), { recursive: true });
     const response = await fetch(url, { redirect: "follow" });
     if (!response.ok) {
       throw new Error(`Failed to download: ${response.status} ${response.statusText}`);
@@ -5367,7 +5780,7 @@ class BinaryDownloaderService {
     const contentLength = response.headers.get("content-length");
     const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
     let downloadedBytes = 0;
-    const fileStream = createWriteStream(destPath);
+    const fileStream = node_fs.createWriteStream(destPath);
     const reader = response.body?.getReader();
     if (!reader) {
       throw new Error("No response body");
@@ -5388,14 +5801,14 @@ class BinaryDownloaderService {
   }
   async extractFromArchive(archivePath, binary2, info) {
     const targetPath = resolveBundledBinary(binary2);
-    await mkdir$4(dirname(targetPath), { recursive: true });
+    await promises.mkdir(require$$0.dirname(targetPath), { recursive: true });
     if (info.archiveType === "zip") {
       await this.extractFromZip(archivePath, info.pathInArchive, targetPath);
     } else if (info.archiveType === "tar.xz") {
       await this.extractFromTarXz(archivePath, info.pathInArchive, targetPath);
     }
     if (process.platform !== "win32") {
-      await chmod(targetPath, 493);
+      await promises.chmod(targetPath, 493);
     }
   }
   async extractFromZip(zipPath, pathInArchive, targetPath) {
@@ -5406,9 +5819,9 @@ class BinaryDownloaderService {
     }
   }
   async extractWithPowerShell(zipPath, pathInArchive, targetPath) {
-    const tempExtractDir = join(app.getPath("temp"), `drapp-extract-${Date.now()}`);
+    const tempExtractDir = require$$0.join(require$$1.app.getPath("temp"), `drapp-extract-${Date.now()}`);
     return new Promise((resolve, reject) => {
-      const ps = spawn("powershell", [
+      const ps = require$$0$1.spawn("powershell", [
         "-NoProfile",
         "-Command",
         `
@@ -5434,16 +5847,16 @@ class BinaryDownloaderService {
     });
   }
   async extractWithUnzip(zipPath, pathInArchive, targetPath) {
-    const tempExtractDir = join(app.getPath("temp"), `drapp-extract-${Date.now()}`);
+    const tempExtractDir = require$$0.join(require$$1.app.getPath("temp"), `drapp-extract-${Date.now()}`);
     return new Promise((resolve, reject) => {
-      const unzip = spawn("unzip", ["-o", zipPath, pathInArchive, "-d", tempExtractDir], {
+      const unzip = require$$0$1.spawn("unzip", ["-o", zipPath, pathInArchive, "-d", tempExtractDir], {
         stdio: "pipe"
       });
       unzip.on("close", async (code) => {
         if (code === 0) {
           try {
-            const extractedPath = join(tempExtractDir, pathInArchive);
-            await rename$2(extractedPath, targetPath);
+            const extractedPath = require$$0.join(tempExtractDir, pathInArchive);
+            await promises.rename(extractedPath, targetPath);
             resolve();
           } catch (error2) {
             reject(error2);
@@ -5460,10 +5873,10 @@ class BinaryDownloaderService {
    * Uses the system 'tar' command which handles .xz decompression natively
    */
   async extractFromTarXz(tarPath, pathInArchive, targetPath) {
-    const tempExtractDir = join(app.getPath("temp"), `drapp-extract-${Date.now()}`);
-    await mkdir$4(tempExtractDir, { recursive: true });
+    const tempExtractDir = require$$0.join(require$$1.app.getPath("temp"), `drapp-extract-${Date.now()}`);
+    await promises.mkdir(tempExtractDir, { recursive: true });
     return new Promise((resolve, reject) => {
-      const tar = spawn("tar", [
+      const tar = require$$0$1.spawn("tar", [
         "-xJf",
         tarPath,
         "-C",
@@ -5477,10 +5890,10 @@ class BinaryDownloaderService {
       tar.on("close", async (code) => {
         if (code === 0) {
           try {
-            const extractedPath = join(tempExtractDir, pathInArchive);
-            await rename$2(extractedPath, targetPath);
-            const { rm: rm2 } = await import("node:fs/promises");
-            await rm2(tempExtractDir, { recursive: true, force: true }).catch(() => {
+            const extractedPath = require$$0.join(tempExtractDir, pathInArchive);
+            await promises.rename(extractedPath, targetPath);
+            const { rm } = await import("node:fs/promises");
+            await rm(tempExtractDir, { recursive: true, force: true }).catch(() => {
             });
             resolve();
           } catch (error2) {
@@ -5526,28 +5939,28 @@ const VERSION_ARGS = {
   // Python-based, installed via pip
 };
 function registerSystemHandlers() {
-  ipcMain.handle("system/binaries", async () => {
+  require$$1.ipcMain.handle("system/binaries", async () => {
     const results = await Promise.all(
       Object.keys(VERSION_ARGS).map(async (name) => checkBinary(name))
     );
     return { ok: true, binaries: results };
   });
-  ipcMain.handle("system/open-binaries-folder", async () => {
+  require$$1.ipcMain.handle("system/open-binaries-folder", async () => {
     try {
-      await shell.openPath(getBundledBinaryDir());
+      await require$$1.shell.openPath(getBundledBinaryDir());
       return { ok: true };
     } catch (error2) {
       return { ok: false, error: errorMessage(error2) };
     }
   });
-  ipcMain.handle("system/repair-binaries", async () => {
+  require$$1.ipcMain.handle("system/repair-binaries", async () => {
     const repaired = [];
     const missing = [];
     const downloaded = [];
     const errors = [];
     for (const name of Object.keys(VERSION_ARGS)) {
       const path2 = resolveBundledBinary(name);
-      if (!existsSync(path2)) {
+      if (!node_fs.existsSync(path2)) {
         missing.push(name);
         continue;
       }
@@ -5555,7 +5968,7 @@ function registerSystemHandlers() {
         continue;
       }
       try {
-        await chmod(path2, 493);
+        await promises.chmod(path2, 493);
         repaired.push(name);
       } catch (error2) {
         errors.push({ name, error: errorMessage(error2) });
@@ -5577,8 +5990,8 @@ function registerSystemHandlers() {
     }
     return { ok: true, repaired, downloaded, missing, errors };
   });
-  ipcMain.handle("system/download-binaries", async () => {
-    const mainWindow2 = BrowserWindow.getAllWindows()[0];
+  require$$1.ipcMain.handle("system/download-binaries", async () => {
+    const mainWindow2 = require$$1.BrowserWindow.getAllWindows()[0];
     const results = await binaryDownloaderService.downloadMissingBinaries((progress) => {
       if (mainWindow2) {
         mainWindow2.webContents.send("binary-download/progress", progress);
@@ -5591,14 +6004,14 @@ function registerSystemHandlers() {
       failed: results.filter((r) => !r.success).map((r) => ({ binary: r.binary, error: r.error }))
     };
   });
-  ipcMain.handle("system/check-missing-binaries", async () => {
+  require$$1.ipcMain.handle("system/check-missing-binaries", async () => {
     const missing = await binaryDownloaderService.checkMissingBinaries();
     return { ok: true, missing };
   });
 }
 async function checkBinary(name) {
   const path2 = resolveBundledBinary(name);
-  const exists = existsSync(path2);
+  const exists = node_fs.existsSync(path2);
   const executable = exists ? isExecutable(path2) : false;
   if (!exists) {
     return { name, path: path2, exists, executable, version: null, error: "missing" };
@@ -5615,10 +6028,10 @@ async function checkBinary(name) {
 }
 function isExecutable(path2) {
   if (process.platform === "win32") {
-    return existsSync(path2);
+    return node_fs.existsSync(path2);
   }
   try {
-    accessSync(path2, constants$3.X_OK);
+    node_fs.accessSync(path2, node_fs.constants.X_OK);
     return true;
   } catch {
     return false;
@@ -5626,7 +6039,7 @@ function isExecutable(path2) {
 }
 async function getVersion(path2, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(path2, args, { stdio: "pipe" });
+    const child = require$$0$1.spawn(path2, args, { stdio: "pipe" });
     let output = "";
     child.stdout.on("data", (chunk) => {
       output += chunk.toString();
@@ -5694,26 +6107,26 @@ class WhisperService {
    */
   async transcribeWithWhisperCpp(request) {
     const binaryPath = resolveBundledBinary("whisper");
-    const outputDir = request.outputDir ?? dirname(request.audioPath);
-    const baseName = parse$7(request.audioPath).name;
-    const outputPrefix = join(outputDir, baseName);
+    const outputDir = request.outputDir ?? require$$0.dirname(request.audioPath);
+    const baseName = require$$0.parse(request.audioPath).name;
+    const outputPrefix = require$$0.join(outputDir, baseName);
     const outputPath = `${outputPrefix}.txt`;
     try {
-      accessSync(binaryPath, constants$3.X_OK);
+      node_fs.accessSync(binaryPath, node_fs.constants.X_OK);
     } catch {
       throw new Error(`whisper not executable at ${binaryPath}`);
     }
-    mkdirSync(outputDir, { recursive: true });
+    node_fs.mkdirSync(outputDir, { recursive: true });
     await this.runProcess(
       binaryPath,
       this.buildWhisperCppArgs(request, outputPrefix),
       request.signal,
       request.onLog
     );
-    if (!existsSync(outputPath)) {
+    if (!node_fs.existsSync(outputPath)) {
       throw new Error(`Transcription completed but output file not found: ${outputPath}`);
     }
-    const transcript = readFileSync$1(outputPath, "utf-8");
+    const transcript = node_fs.readFileSync(outputPath, "utf-8");
     return { transcript, outputPath };
   }
   /**
@@ -5723,10 +6136,10 @@ class WhisperService {
     if (command.length === 0) {
       throw new Error("faster-whisper command not configured");
     }
-    const outputDir = request.outputDir ?? dirname(request.audioPath);
-    const baseName = parse$7(request.audioPath).name;
-    const outputPath = join(outputDir, `${baseName}.txt`);
-    mkdirSync(outputDir, { recursive: true });
+    const outputDir = request.outputDir ?? require$$0.dirname(request.audioPath);
+    const baseName = require$$0.parse(request.audioPath).name;
+    const outputPath = require$$0.join(outputDir, `${baseName}.txt`);
+    node_fs.mkdirSync(outputDir, { recursive: true });
     const modelArg = this.resolveModelForFasterWhisper(request.modelPath, request.modelSize);
     const [cmd, ...baseArgs] = command;
     const args = [
@@ -5746,10 +6159,10 @@ class WhisperService {
       args.push("--device", "cpu");
     }
     await this.runProcess(cmd, args, request.signal, request.onLog);
-    if (!existsSync(outputPath)) {
+    if (!node_fs.existsSync(outputPath)) {
       throw new Error(`Transcription completed but output file not found: ${outputPath}`);
     }
-    const transcript = readFileSync$1(outputPath, "utf-8");
+    const transcript = node_fs.readFileSync(outputPath, "utf-8");
     return { transcript, outputPath };
   }
   /**
@@ -5782,7 +6195,7 @@ class WhisperService {
     if (modelSize) {
       return modelSize;
     }
-    const modelName = basename(modelPath).toLowerCase();
+    const modelName = require$$0.basename(modelPath).toLowerCase();
     const sizePatterns = [
       { pattern: /large-v3/i, size: "large-v3" },
       { pattern: /large-v2/i, size: "large-v2" },
@@ -5798,7 +6211,7 @@ class WhisperService {
         return size;
       }
     }
-    if (existsSync(modelPath)) {
+    if (node_fs.existsSync(modelPath)) {
       return modelPath;
     }
     this.logger.warn("could not infer model size, defaulting to base");
@@ -5815,7 +6228,7 @@ class WhisperService {
         reject(error2);
         return;
       }
-      const child = spawn(command, args, { stdio: "pipe" });
+      const child = require$$0$1.spawn(command, args, { stdio: "pipe" });
       let stderr = "";
       let settled = false;
       const finalize = (error2) => {
@@ -6144,9 +6557,9 @@ function isTwoPassEnabled(config) {
   return false;
 }
 function buildTwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogDir, cpuCapabilities) {
-  const { basename: basename2, join: join2 } = require2("node:path");
-  const inputName = basename2(inputPath, require2("node:path").extname(inputPath));
-  const passLogFile = join2(passLogDir, `${inputName}-pass`);
+  const { basename, join } = require("node:path");
+  const inputName = basename(inputPath, require("node:path").extname(inputPath));
+  const passLogFile = join(passLogDir, `${inputName}-pass`);
   if (config.codec === "h265") {
     return buildH265TwoPassArgs(inputPath, outputPath, config, sourceInfo, passLogFile, cpuCapabilities);
   }
@@ -6812,7 +7225,7 @@ function clearEncoderCache() {
 }
 function getEncoderList(ffmpegPath) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, ["-encoders", "-hide_banner"]);
+    const proc = require$$0$1.spawn(ffmpegPath, ["-encoders", "-hide_banner"]);
     let stdout = "";
     proc.stdout.on("data", (data) => {
       stdout += data.toString();
@@ -6854,24 +7267,24 @@ const FFMPEG_DOWNLOAD_URLS = {
 };
 async function upgradeFFmpeg(onProgress) {
   const platform2 = process.platform;
-  const arch2 = process.arch;
-  const key = `${platform2}-${arch2}`;
+  const arch = process.arch;
+  const key = `${platform2}-${arch}`;
   const downloadInfo = FFMPEG_DOWNLOAD_URLS[key];
   if (!downloadInfo) {
     return {
       success: false,
-      error: `No FFmpeg upgrade available for ${platform2}-${arch2}`
+      error: `No FFmpeg upgrade available for ${platform2}-${arch}`
     };
   }
   const binaryDir = getBundledBinaryDir();
   const ffmpegPath = resolveBundledBinary("ffmpeg");
   const backupPath = `${ffmpegPath}.backup`;
-  const tempDir = join(binaryDir, ".ffmpeg-upgrade-temp");
+  const tempDir = require$$0.join(binaryDir, ".ffmpeg-upgrade-temp");
   try {
-    await mkdir$4(tempDir, { recursive: true });
+    await promises.mkdir(tempDir, { recursive: true });
     onProgress?.({ stage: "downloading", progress: 0 });
     logger.info("Downloading enhanced FFmpeg", { url: downloadInfo.url });
-    const downloadPath = join(tempDir, `ffmpeg-download.${downloadInfo.type}`);
+    const downloadPath = require$$0.join(tempDir, `ffmpeg-download.${downloadInfo.type}`);
     await downloadFile(downloadInfo.url, downloadPath, (progress) => {
       onProgress?.({ stage: "downloading", progress });
     });
@@ -6883,12 +7296,12 @@ async function upgradeFFmpeg(onProgress) {
     }
     onProgress?.({ stage: "installing" });
     logger.info("Installing enhanced FFmpeg");
-    if (existsSync(ffmpegPath)) {
-      await rename$2(ffmpegPath, backupPath);
+    if (node_fs.existsSync(ffmpegPath)) {
+      await promises.rename(ffmpegPath, backupPath);
     }
-    await rename$2(extractedBinary, ffmpegPath);
+    await promises.rename(extractedBinary, ffmpegPath);
     if (platform2 !== "win32") {
-      await chmod(ffmpegPath, 493);
+      await promises.chmod(ffmpegPath, 493);
     }
     onProgress?.({ stage: "verifying" });
     logger.info("Verifying new FFmpeg");
@@ -6896,31 +7309,31 @@ async function upgradeFFmpeg(onProgress) {
     const newInfo = await detectAv1Encoders();
     if (!newInfo.available.includes("libsvtav1")) {
       logger.warn("New FFmpeg does not have SVT-AV1, restoring backup");
-      if (existsSync(backupPath)) {
-        await rm(ffmpegPath, { force: true });
-        await rename$2(backupPath, ffmpegPath);
+      if (node_fs.existsSync(backupPath)) {
+        await promises.rm(ffmpegPath, { force: true });
+        await promises.rename(backupPath, ffmpegPath);
       }
       throw new Error("Downloaded FFmpeg does not include SVT-AV1 encoder");
     }
-    if (existsSync(backupPath)) {
-      await rm(backupPath, { force: true });
+    if (node_fs.existsSync(backupPath)) {
+      await promises.rm(backupPath, { force: true });
     }
-    await rm(tempDir, { recursive: true, force: true });
+    await promises.rm(tempDir, { recursive: true, force: true });
     onProgress?.({ stage: "complete" });
     logger.info("FFmpeg upgrade complete", { encoders: newInfo.available });
     return { success: true };
   } catch (error2) {
     const message = error2 instanceof Error ? error2.message : "Unknown error";
     logger.error("FFmpeg upgrade failed", { error: message });
-    if (existsSync(backupPath)) {
+    if (node_fs.existsSync(backupPath)) {
       try {
-        await rm(ffmpegPath, { force: true });
-        await rename$2(backupPath, ffmpegPath);
+        await promises.rm(ffmpegPath, { force: true });
+        await promises.rename(backupPath, ffmpegPath);
       } catch {
       }
     }
     try {
-      await rm(tempDir, { recursive: true, force: true });
+      await promises.rm(tempDir, { recursive: true, force: true });
     } catch {
     }
     onProgress?.({ stage: "error", error: message });
@@ -6941,7 +7354,7 @@ async function downloadFile(url, destPath, onProgress) {
   if (!reader) {
     throw new Error("No response body");
   }
-  const writer = createWriteStream(destPath);
+  const writer = node_fs.createWriteStream(destPath);
   let downloadedBytes = 0;
   try {
     while (true) {
@@ -6961,17 +7374,17 @@ async function downloadFile(url, destPath, onProgress) {
 async function extractFFmpeg(archivePath, tempDir, type2, platform2) {
   const binaryName = platform2 === "win32" ? "ffmpeg.exe" : "ffmpeg";
   if (type2 === "zip") {
-    const extractDir = join(tempDir, "extracted");
-    await mkdir$4(extractDir, { recursive: true });
+    const extractDir = require$$0.join(tempDir, "extracted");
+    await promises.mkdir(extractDir, { recursive: true });
     await new Promise((resolve, reject) => {
       let proc;
       if (platform2 === "win32") {
-        proc = spawn("powershell", [
+        proc = require$$0$1.spawn("powershell", [
           "-Command",
           `Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`
         ]);
       } else {
-        proc = spawn("unzip", ["-o", archivePath, "-d", extractDir]);
+        proc = require$$0$1.spawn("unzip", ["-o", archivePath, "-d", extractDir]);
       }
       proc.on("close", (code) => {
         if (code === 0) {
@@ -6987,10 +7400,10 @@ async function extractFFmpeg(archivePath, tempDir, type2, platform2) {
   return null;
 }
 async function findBinaryInDir(dir, binaryName) {
-  const { readdir: readdir2, stat: stat2 } = await import("node:fs/promises");
-  const entries = await readdir2(dir, { withFileTypes: true });
+  const { readdir, stat: stat2 } = await import("node:fs/promises");
+  const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    const fullPath = join(dir, entry.name);
+    const fullPath = require$$0.join(dir, entry.name);
     if (entry.isDirectory()) {
       const found = await findBinaryInDir(fullPath, binaryName);
       if (found) return found;
@@ -7008,7 +7421,7 @@ class ArchivalStatePersistence {
     this.logger = new Logger("ArchivalStatePersistence");
     this.saveDebounceTimer = null;
     this.saveDebounceMs = 3e4;
-    this.statePath = join(app.getPath("userData"), STATE_FILE_NAME);
+    this.statePath = require$$0.join(require$$1.app.getPath("userData"), STATE_FILE_NAME);
   }
   /**
    * Save state to disk immediately
@@ -7024,7 +7437,7 @@ class ArchivalStatePersistence {
         version: CURRENT_VERSION,
         savedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
-      await writeFile$1(this.statePath, JSON.stringify(stateWithMeta, null, 2), "utf-8");
+      await promises.writeFile(this.statePath, JSON.stringify(stateWithMeta, null, 2), "utf-8");
       this.logger.debug("State saved", { itemCount: state.job.items.length });
     } catch (error2) {
       this.logger.error("Failed to save state", { error: error2 });
@@ -7059,7 +7472,7 @@ class ArchivalStatePersistence {
    */
   async loadState() {
     try {
-      const content = await readFile$1(this.statePath, "utf-8");
+      const content = await promises.readFile(this.statePath, "utf-8");
       const state = JSON.parse(content);
       if (state.version !== CURRENT_VERSION) {
         this.logger.warn("State file version mismatch, discarding", {
@@ -7094,7 +7507,7 @@ class ArchivalStatePersistence {
   async clearState() {
     this.cancelPendingSave();
     try {
-      await unlink(this.statePath);
+      await promises.unlink(this.statePath);
       this.logger.debug("State file cleared");
     } catch (error2) {
       if (error2.code !== "ENOENT") {
@@ -7107,7 +7520,7 @@ class ArchivalStatePersistence {
    */
   async hasPersistedState() {
     try {
-      await access(this.statePath);
+      await promises.access(this.statePath);
       return true;
     } catch {
       return false;
@@ -7120,7 +7533,7 @@ class ArchivalStatePersistence {
     return this.statePath;
   }
 }
-const execAsync = promisify(exec);
+const execAsync = require$$0$2.promisify(require$$0$1.exec);
 class ArchivalService {
   constructor(onEvent) {
     this.onEvent = onEvent;
@@ -7206,7 +7619,7 @@ class ArchivalService {
     let totalInputSize = 0;
     for (const inputPath of inputPaths) {
       try {
-        const inputStat = await stat$5(inputPath);
+        const inputStat = await promises.stat(inputPath);
         totalInputSize += inputStat.size;
       } catch {
       }
@@ -7237,7 +7650,7 @@ class ArchivalService {
    * Uses platform-specific commands
    */
   async getFreeDiskSpace(dirPath) {
-    const os2 = platform$1();
+    const os2 = os$1.platform();
     if (os2 === "win32") {
       const driveMatch = dirPath.match(/^([A-Za-z]):/);
       const isUncPath = dirPath.startsWith("\\\\");
@@ -7319,7 +7732,7 @@ class ArchivalService {
       throw new Error("No output directory provided");
     }
     try {
-      await mkdir$4(outputDir, { recursive: true });
+      await promises.mkdir(outputDir, { recursive: true });
     } catch (error2) {
       throw new Error(`Failed to create output directory: ${outputDir}`);
     }
@@ -7350,9 +7763,9 @@ class ArchivalService {
       this.logger.info(`Encoder ${config.av1.encoder} not available, using ${bestEncoder}`);
       config.av1 = { ...config.av1, encoder: bestEncoder };
     }
-    const batchId = randomUUID();
+    const batchId = require$$1$1.randomUUID();
     const items = inputPaths.map((inputPath, index) => ({
-      id: randomUUID(),
+      id: require$$1$1.randomUUID(),
       inputPath,
       outputPath: this.buildOutputPath(
         inputPath,
@@ -7404,7 +7817,7 @@ class ArchivalService {
     this.abortController?.abort();
     this.activeJob.status = "cancelled";
     if (this.activeProcess) {
-      if (platform$1() === "win32") {
+      if (os$1.platform() === "win32") {
         this.activeProcess.kill();
       } else {
         this.activeProcess.kill("SIGTERM");
@@ -7425,7 +7838,7 @@ class ArchivalService {
     this.logger.info("Pausing encoding job", { jobId: this.activeJob.id });
     this.isPaused = true;
     if (this.activeProcess) {
-      if (platform$1() === "win32") {
+      if (os$1.platform() === "win32") {
         this.activeProcess.kill();
       } else {
         this.activeProcess.kill("SIGTERM");
@@ -7534,7 +7947,7 @@ class ArchivalService {
       }
       if (item.status === "queued") {
         try {
-          await access(item.inputPath);
+          await promises.access(item.inputPath);
         } catch {
           item.status = "failed";
           item.error = "Source file no longer exists";
@@ -7547,7 +7960,7 @@ class ArchivalService {
     }
     if (state.twoPassState) {
       try {
-        await rm(state.twoPassState.passLogDir, { recursive: true, force: true });
+        await promises.rm(state.twoPassState.passLogDir, { recursive: true, force: true });
         this.logger.debug("Cleaned up two-pass log files", { dir: state.twoPassState.passLogDir });
       } catch {
       }
@@ -7555,7 +7968,7 @@ class ArchivalService {
     this.speedSamples = [];
     this.isPaused = false;
     try {
-      await access(this.activeJob.config.outputDir);
+      await promises.access(this.activeJob.config.outputDir);
     } catch {
       this.activeJob = null;
       throw new Error("Output directory no longer exists or is not accessible");
@@ -7583,7 +7996,7 @@ class ArchivalService {
     }
     if (state.twoPassState) {
       try {
-        await rm(state.twoPassState.passLogDir, { recursive: true, force: true });
+        await promises.rm(state.twoPassState.passLogDir, { recursive: true, force: true });
       } catch {
       }
     }
@@ -7649,17 +8062,17 @@ class ArchivalService {
     const containerExtensions = ["mkv", "mp4", "webm"];
     for (const inputPath of inputPaths) {
       try {
-        const inputStat = await stat$5(inputPath);
+        const inputStat = await promises.stat(inputPath);
         totalInputBytes += inputStat.size;
         const meta = await this.metadata.extract({ filePath: inputPath });
         if (meta.duration) {
           totalDurationSeconds += meta.duration;
         }
-        const inputName = basename(inputPath, extname(inputPath));
+        const inputName = require$$0.basename(inputPath, require$$0.extname(inputPath));
         for (const ext of containerExtensions) {
-          const outputPath = join(outputDir, `${inputName}.${ext}`);
+          const outputPath = require$$0.join(outputDir, `${inputName}.${ext}`);
           try {
-            await access(outputPath);
+            await promises.access(outputPath);
             existingCount++;
             break;
           } catch {
@@ -7750,22 +8163,22 @@ class ArchivalService {
           return;
         }
       }
-      await access(item.inputPath);
-      const inputStat = await stat$5(item.inputPath);
+      await promises.access(item.inputPath);
+      const inputStat = await promises.stat(item.inputPath);
       item.inputSize = inputStat.size;
       const sourceInfo = await this.analyzeVideo(item.inputPath);
       item.sourceInfo = sourceInfo;
       item.effectiveCrf = getOptimalCrf(sourceInfo);
       if (!this.activeJob.config.overwriteExisting) {
         try {
-          await access(item.outputPath);
+          await promises.access(item.outputPath);
           this.logger.info("Skipping existing output", { outputPath: item.outputPath });
           this.markItemSkipped(item);
           return;
         } catch {
         }
       }
-      await mkdir$4(dirname(item.outputPath), { recursive: true });
+      await promises.mkdir(require$$0.dirname(item.outputPath), { recursive: true });
       item.status = "encoding";
       this.emitEvent({
         batchId: this.activeJob.id,
@@ -7777,7 +8190,7 @@ class ArchivalService {
         effectiveCrf: item.effectiveCrf
       });
       await this.encodeVideo(item, sourceInfo);
-      const outputStat = await stat$5(item.outputPath);
+      const outputStat = await promises.stat(item.outputPath);
       item.outputSize = outputStat.size;
       item.compressionRatio = item.inputSize ? item.inputSize / item.outputSize : void 0;
       const outputLarger = item.inputSize && item.outputSize > item.inputSize;
@@ -7801,7 +8214,7 @@ class ArchivalService {
           compressionRatio: item.compressionRatio
         });
         this.logger.info("Skipped - output larger than input", {
-          input: basename(item.inputPath),
+          input: require$$0.basename(item.inputPath),
           inputSize: item.inputSize,
           outputSize: item.outputSize
         });
@@ -7859,8 +8272,8 @@ class ArchivalService {
         captionPath: item.captionPath
       });
       this.logger.info(`Completed archival encoding${warningMsg}`, {
-        input: basename(item.inputPath),
-        output: basename(item.outputPath),
+        input: require$$0.basename(item.inputPath),
+        output: require$$0.basename(item.outputPath),
         ratio: item.compressionRatio?.toFixed(2),
         outputLarger
       });
@@ -7898,7 +8311,7 @@ class ArchivalService {
       extendedMeta.hdrFormat,
       extendedMeta.bitDepth
     );
-    const container = extname(filePath).toLowerCase().replace(".", "") || void 0;
+    const container = require$$0.extname(filePath).toLowerCase().replace(".", "") || void 0;
     return {
       width: meta.width ?? 1920,
       height: meta.height ?? 1080,
@@ -7927,7 +8340,7 @@ class ArchivalService {
   async getExtendedMetadata(filePath) {
     const ffprobePath = resolveBundledBinary("ffprobe");
     return new Promise((resolve) => {
-      const proc = spawn(ffprobePath, [
+      const proc = require$$0$1.spawn(ffprobePath, [
         "-v",
         "quiet",
         "-print_format",
@@ -8066,8 +8479,8 @@ class ArchivalService {
     }
     const config = this.activeJob.config;
     const batchId = this.activeJob.id;
-    const passLogDir = join(dirname(item.outputPath), ".pass-logs");
-    await mkdir$4(passLogDir, { recursive: true });
+    const passLogDir = require$$0.join(require$$0.dirname(item.outputPath), ".pass-logs");
+    await promises.mkdir(passLogDir, { recursive: true });
     try {
       const twoPassArgs = buildTwoPassArgs(
         item.inputPath,
@@ -8077,7 +8490,7 @@ class ArchivalService {
         passLogDir,
         cpuCapabilities
       );
-      this.logger.info("Starting two-pass encoding - Pass 1", { input: basename(item.inputPath) });
+      this.logger.info("Starting two-pass encoding - Pass 1", { input: require$$0.basename(item.inputPath) });
       this.emitEvent({
         batchId,
         itemId: item.id,
@@ -8089,11 +8502,11 @@ class ArchivalService {
       if (this.abortController?.signal.aborted) {
         throw new Error("Encoding cancelled");
       }
-      this.logger.info("Starting two-pass encoding - Pass 2", { input: basename(item.inputPath) });
+      this.logger.info("Starting two-pass encoding - Pass 2", { input: require$$0.basename(item.inputPath) });
       await this.runFFmpegPass(item, sourceInfo, twoPassArgs.pass2, 2, batchId);
     } finally {
       try {
-        await rm(passLogDir, { recursive: true, force: true });
+        await promises.rm(passLogDir, { recursive: true, force: true });
       } catch {
       }
     }
@@ -8108,7 +8521,7 @@ class ArchivalService {
       const isPass2 = passNumber === 2;
       const outputPath = isPass2 ? item.outputPath : null;
       this.logger.debug(`Starting FFmpeg pass ${passNumber}`, { args: fullArgs.join(" ") });
-      const proc = spawn(ffmpegPath, fullArgs, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = require$$0$1.spawn(ffmpegPath, fullArgs, { stdio: ["ignore", "pipe", "pipe"] });
       this.activeProcess = proc;
       const startTime = Date.now();
       const durationMs = (sourceInfo.duration ?? 0) * 1e3;
@@ -8209,7 +8622,7 @@ class ArchivalService {
         reject(typedError);
       });
       const abortHandler = () => {
-        if (platform$1() === "win32") {
+        if (os$1.platform() === "win32") {
           proc.kill();
         } else {
           proc.kill("SIGTERM");
@@ -8240,7 +8653,7 @@ class ArchivalService {
       );
       args.unshift("-progress", "pipe:1", "-nostats");
       this.logger.debug("Starting FFmpeg", { args: args.join(" ") });
-      const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = require$$0$1.spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
       this.activeProcess = proc;
       this.encodingStartTime = Date.now();
       const durationMs = (sourceInfo.duration ?? 0) * 1e3;
@@ -8411,7 +8824,7 @@ class ArchivalService {
         reject(typedError);
       });
       const abortHandler = () => {
-        if (platform$1() === "win32") {
+        if (os$1.platform() === "win32") {
           proc.kill();
         } else {
           proc.kill("SIGTERM");
@@ -8436,7 +8849,7 @@ class ArchivalService {
       return true;
     }
     try {
-      await access(outputPath);
+      await promises.access(outputPath);
       this.fillModeSeenOutputs.add(normalizedOutput);
       return true;
     } catch {
@@ -8462,14 +8875,14 @@ class ArchivalService {
   }
   normalizeOutputPath(filePath) {
     const normalized = filePath.replace(/\\/g, "/");
-    return platform$1() === "win32" ? normalized.toLowerCase() : normalized;
+    return os$1.platform() === "win32" ? normalized.toLowerCase() : normalized;
   }
   /**
    * Clean up partial output file on error/cancel
    */
   async cleanupPartialOutput(outputPath) {
     try {
-      await unlink(outputPath);
+      await promises.unlink(outputPath);
       this.logger.debug("Cleaned up partial output", { outputPath });
     } catch {
     }
@@ -8510,25 +8923,25 @@ class ArchivalService {
    * Also handles the case where input and output would be the same file
    */
   buildOutputPath(inputPath, outputDir, config, relativePath) {
-    const inputName = basename(inputPath, extname(inputPath));
+    const inputName = require$$0.basename(inputPath, require$$0.extname(inputPath));
     const extension = config.container;
     let outputPath;
     if (config.preserveStructure && relativePath) {
-      const relativeDir = dirname(relativePath);
+      const relativeDir = require$$0.dirname(relativePath);
       if (relativeDir && relativeDir !== ".") {
-        outputPath = join(outputDir, relativeDir, `${inputName}.${extension}`);
+        outputPath = require$$0.join(outputDir, relativeDir, `${inputName}.${extension}`);
       } else {
-        outputPath = join(outputDir, `${inputName}.${extension}`);
+        outputPath = require$$0.join(outputDir, `${inputName}.${extension}`);
       }
     } else {
-      outputPath = join(outputDir, `${inputName}.${extension}`);
+      outputPath = require$$0.join(outputDir, `${inputName}.${extension}`);
     }
     const normalizedInput = inputPath.toLowerCase().replace(/\\/g, "/");
     const normalizedOutput = outputPath.toLowerCase().replace(/\\/g, "/");
     if (normalizedInput === normalizedOutput) {
       const codecSuffix = config.codec === "h265" ? ".hevc" : ".av1";
-      outputPath = join(
-        dirname(outputPath),
+      outputPath = require$$0.join(
+        require$$0.dirname(outputPath),
         `${inputName}${codecSuffix}.${extension}`
       );
     }
@@ -8544,7 +8957,7 @@ class ArchivalService {
       let outputPath = item.outputPath;
       let counter = 1;
       while (usedPaths.has(outputPath)) {
-        const ext = extname(item.outputPath);
+        const ext = require$$0.extname(item.outputPath);
         const base = item.outputPath.slice(0, -ext.length);
         outputPath = `${base}_${counter}${ext}`;
         counter++;
@@ -8568,9 +8981,9 @@ class ArchivalService {
     } else {
       timestampSec = Math.min(Math.max(0.5, duration * 0.1), Math.max(0, duration - 0.1));
     }
-    const videoDir = dirname(videoPath);
-    const videoName = basename(videoPath, extname(videoPath));
-    const thumbnailPath = join(videoDir, `${videoName}.jpg`);
+    const videoDir = require$$0.dirname(videoPath);
+    const videoName = require$$0.basename(videoPath, require$$0.extname(videoPath));
+    const thumbnailPath = require$$0.join(videoDir, `${videoName}.jpg`);
     return new Promise((resolve, reject) => {
       const args = [
         "-ss",
@@ -8587,21 +9000,21 @@ class ArchivalService {
         thumbnailPath
       ];
       this.logger.debug("Extracting thumbnail", { videoPath, thumbnailPath, timestampSec });
-      const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = require$$0$1.spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
       let stderr = "";
       proc.stderr.on("data", (data) => {
         stderr += data.toString();
       });
       const abortHandler = () => {
         proc.kill();
-        void unlink(thumbnailPath).catch(() => {
+        void promises.unlink(thumbnailPath).catch(() => {
         });
       };
       this.abortController?.signal.addEventListener("abort", abortHandler, { once: true });
       proc.on("close", async (code) => {
         this.abortController?.signal.removeEventListener("abort", abortHandler);
         if (this.abortController?.signal.aborted) {
-          await unlink(thumbnailPath).catch(() => {
+          await promises.unlink(thumbnailPath).catch(() => {
           });
           reject(new Error("Thumbnail extraction cancelled"));
           return;
@@ -8610,7 +9023,7 @@ class ArchivalService {
           this.logger.info("Thumbnail extracted", { thumbnailPath });
           resolve(thumbnailPath);
         } else {
-          await unlink(thumbnailPath).catch(() => {
+          await promises.unlink(thumbnailPath).catch(() => {
           });
           this.logger.warn("Thumbnail extraction failed", { code, stderr: stderr.slice(-500) });
           reject(new Error(`Thumbnail extraction failed with code ${code}`));
@@ -8618,7 +9031,7 @@ class ArchivalService {
       });
       proc.on("error", async (error2) => {
         this.abortController?.signal.removeEventListener("abort", abortHandler);
-        await unlink(thumbnailPath).catch(() => {
+        await promises.unlink(thumbnailPath).catch(() => {
         });
         this.logger.warn("Thumbnail extraction error", { error: error2.message });
         reject(error2);
@@ -8641,19 +9054,19 @@ class ArchivalService {
         throw new Error("Whisper model not configured. Please select a model in Settings.");
       }
       try {
-        await access(modelPath);
+        await promises.access(modelPath);
       } catch {
         throw new Error(`Whisper model not found at: ${modelPath}`);
       }
     }
     const ffmpegPath = resolveBundledBinary("ffmpeg");
-    const videoDir = dirname(videoPath);
-    const videoName = parse$7(videoPath).name;
+    const videoDir = require$$0.dirname(videoPath);
+    const videoName = require$$0.parse(videoPath).name;
     const tempAudioName = `${videoName}_whisper_temp`;
-    const audioPath = join(videoDir, `${tempAudioName}.wav`);
-    const vttOutputPath = join(videoDir, `${tempAudioName}.vtt`);
-    const txtOutputPath = join(videoDir, `${tempAudioName}.txt`);
-    const finalVttPath = join(videoDir, `${videoName}.vtt`);
+    const audioPath = require$$0.join(videoDir, `${tempAudioName}.wav`);
+    const vttOutputPath = require$$0.join(videoDir, `${tempAudioName}.vtt`);
+    const txtOutputPath = require$$0.join(videoDir, `${tempAudioName}.txt`);
+    const finalVttPath = require$$0.join(videoDir, `${videoName}.vtt`);
     this.logger.info("Starting caption extraction", {
       videoPath,
       language,
@@ -8681,9 +9094,9 @@ class ArchivalService {
           }
         });
         try {
-          await unlink(finalVttPath).catch(() => {
+          await promises.unlink(finalVttPath).catch(() => {
           });
-          await rename$2(vttOutputPath, finalVttPath);
+          await promises.rename(vttOutputPath, finalVttPath);
         } catch (renameError) {
           this.logger.warn("Failed to rename VTT file, using temp name", {
             from: vttOutputPath,
@@ -8697,9 +9110,9 @@ class ArchivalService {
         return finalVttPath;
       }
     } finally {
-      await unlink(audioPath).catch(() => {
+      await promises.unlink(audioPath).catch(() => {
       });
-      await unlink(txtOutputPath).catch(() => {
+      await promises.unlink(txtOutputPath).catch(() => {
       });
     }
   }
@@ -8727,21 +9140,21 @@ class ArchivalService {
         audioPath
       ];
       this.logger.debug("Extracting audio for transcription", { args: args.join(" ") });
-      const proc = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = require$$0$1.spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
       let stderr = "";
       proc.stderr.on("data", (data) => {
         stderr += data.toString();
       });
       const abortHandler = () => {
         proc.kill();
-        void unlink(audioPath).catch(() => {
+        void promises.unlink(audioPath).catch(() => {
         });
       };
       this.abortController?.signal.addEventListener("abort", abortHandler, { once: true });
       proc.on("close", (code) => {
         this.abortController?.signal.removeEventListener("abort", abortHandler);
         if (this.abortController?.signal.aborted) {
-          void unlink(audioPath).catch(() => {
+          void promises.unlink(audioPath).catch(() => {
           });
           reject(new Error("Caption extraction cancelled"));
           return;
@@ -8749,7 +9162,7 @@ class ArchivalService {
         if (code === 0) {
           resolve();
         } else {
-          void unlink(audioPath).catch(() => {
+          void promises.unlink(audioPath).catch(() => {
           });
           if (stderr.includes("does not contain any stream") || stderr.includes("Output file is empty")) {
             reject(new Error("Video has no audio stream"));
@@ -8760,7 +9173,7 @@ class ArchivalService {
       });
       proc.on("error", (error2) => {
         this.abortController?.signal.removeEventListener("abort", abortHandler);
-        void unlink(audioPath).catch(() => {
+        void promises.unlink(audioPath).catch(() => {
         });
         reject(error2);
       });
@@ -8820,20 +9233,20 @@ async function findVideoFilesRecursively(rootPath, basePath = rootPath) {
   const files = [];
   async function walk(dir) {
     try {
-      const entries = await readdir(dir, { withFileTypes: true });
+      const entries = await promises.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
-        const fullPath = join(dir, entry.name);
+        const fullPath = require$$0.join(dir, entry.name);
         if (entry.isDirectory()) {
           if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) {
             continue;
           }
           await walk(fullPath);
         } else if (entry.isFile()) {
-          const ext = extname(entry.name).toLowerCase();
+          const ext = require$$0.extname(entry.name).toLowerCase();
           if (VIDEO_EXTENSIONS.has(ext)) {
             files.push({
               absolutePath: fullPath,
-              relativePath: relative(basePath, fullPath)
+              relativePath: require$$0.relative(basePath, fullPath)
             });
           }
         }
@@ -8849,7 +9262,7 @@ function getArchivalService() {
   return archivalService;
 }
 function getMainWindow() {
-  const windows = BrowserWindow.getAllWindows();
+  const windows = require$$1.BrowserWindow.getAllWindows();
   return windows.length > 0 ? windows[0] : null;
 }
 function emitArchivalEvent(event) {
@@ -8880,8 +9293,8 @@ function getService() {
   return archivalService;
 }
 function registerArchivalHandlers() {
-  ipcMain.handle("archival/select-files", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("archival/select-files", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openFile", "multiSelections"],
       filters: [
@@ -8892,31 +9305,31 @@ function registerArchivalHandlers() {
       ],
       title: "Select Videos for Archival Processing"
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
     return { ok: true, paths: result.filePaths };
   });
-  ipcMain.handle("archival/select-output-dir", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("archival/select-output-dir", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openDirectory", "createDirectory"],
       title: "Select Output Directory for Archived Videos"
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
     return { ok: true, path: result.filePaths[0] };
   });
-  ipcMain.handle("archival/select-folder", async () => {
-    const focusedWindow = BrowserWindow.getFocusedWindow();
+  require$$1.ipcMain.handle("archival/select-folder", async () => {
+    const focusedWindow = require$$1.BrowserWindow.getFocusedWindow();
     const dialogOptions = {
       properties: ["openDirectory"],
       title: "Select Folder for Archival Processing"
     };
-    const result = focusedWindow ? await dialog.showOpenDialog(focusedWindow, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+    const result = focusedWindow ? await require$$1.dialog.showOpenDialog(focusedWindow, dialogOptions) : await require$$1.dialog.showOpenDialog(dialogOptions);
     if (result.canceled || result.filePaths.length === 0) {
       return { ok: false, canceled: true };
     }
@@ -8940,13 +9353,13 @@ function registerArchivalHandlers() {
       };
     }
   });
-  ipcMain.handle("archival/get-default-config", async () => {
+  require$$1.ipcMain.handle("archival/get-default-config", async () => {
     return {
       ok: true,
       config: DEFAULT_ARCHIVAL_CONFIG
     };
   });
-  ipcMain.handle("archival/detect-encoders", async () => {
+  require$$1.ipcMain.handle("archival/detect-encoders", async () => {
     try {
       const encoderInfo = await detectAv1Encoders();
       return { ok: true, encoderInfo };
@@ -8957,7 +9370,7 @@ function registerArchivalHandlers() {
       };
     }
   });
-  ipcMain.handle("archival/upgrade-ffmpeg", async () => {
+  require$$1.ipcMain.handle("archival/upgrade-ffmpeg", async () => {
     try {
       const mainWindow2 = getMainWindow();
       const result = await upgradeFFmpeg((progress) => {
@@ -8977,7 +9390,7 @@ function registerArchivalHandlers() {
       };
     }
   });
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "archival/start-batch",
     async (_event, request) => {
       const { inputPaths, outputDir, config, folderRoot, relativePaths } = request;
@@ -8999,17 +9412,17 @@ function registerArchivalHandlers() {
       }
     }
   );
-  ipcMain.handle("archival/get-status", async () => {
+  require$$1.ipcMain.handle("archival/get-status", async () => {
     const service = getService();
     const job = service.getStatus();
     return { ok: true, job };
   });
-  ipcMain.handle("archival/cancel", async () => {
+  require$$1.ipcMain.handle("archival/cancel", async () => {
     const service = getService();
     const canceled = service.cancel();
     return { ok: true, canceled };
   });
-  ipcMain.handle("archival/pause", async () => {
+  require$$1.ipcMain.handle("archival/pause", async () => {
     try {
       const service = getService();
       const paused = await service.pause();
@@ -9022,7 +9435,7 @@ function registerArchivalHandlers() {
       };
     }
   });
-  ipcMain.handle("archival/resume", async () => {
+  require$$1.ipcMain.handle("archival/resume", async () => {
     try {
       const service = getService();
       const resumed = await service.resume();
@@ -9035,7 +9448,7 @@ function registerArchivalHandlers() {
       };
     }
   });
-  ipcMain.handle("archival/check-recovery", async () => {
+  require$$1.ipcMain.handle("archival/check-recovery", async () => {
     try {
       const service = getService();
       const state = await service.checkForRecovery();
@@ -9057,7 +9470,7 @@ function registerArchivalHandlers() {
       return { ok: false, hasRecovery: false };
     }
   });
-  ipcMain.handle("archival/resume-recovery", async () => {
+  require$$1.ipcMain.handle("archival/resume-recovery", async () => {
     try {
       const service = getService();
       const state = await service.checkForRecovery();
@@ -9073,7 +9486,7 @@ function registerArchivalHandlers() {
       };
     }
   });
-  ipcMain.handle("archival/discard-recovery", async () => {
+  require$$1.ipcMain.handle("archival/discard-recovery", async () => {
     try {
       const service = getService();
       const state = await service.checkForRecovery();
@@ -9088,11 +9501,11 @@ function registerArchivalHandlers() {
       };
     }
   });
-  ipcMain.handle("archival/get-pause-state", async () => {
+  require$$1.ipcMain.handle("archival/get-pause-state", async () => {
     const service = getService();
     return { ok: true, isPaused: service.getIsPaused() };
   });
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "archival/preview-command",
     async (_event, request) => {
       const { inputPath, outputDir, config } = request;
@@ -9116,7 +9529,7 @@ function registerArchivalHandlers() {
       }
     }
   );
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "archival/estimate-size",
     async (_event, inputPath) => {
       if (!inputPath) {
@@ -9134,7 +9547,7 @@ function registerArchivalHandlers() {
       }
     }
   );
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "archival/get-batch-info",
     async (_event, request) => {
       const { inputPaths, outputDir } = request;
@@ -9165,7 +9578,7 @@ function registerArchivalHandlers() {
       }
     }
   );
-  ipcMain.handle(
+  require$$1.ipcMain.handle(
     "archival/analyze-video",
     async (_event, inputPath) => {
       if (!inputPath) {
@@ -9200,28 +9613,28 @@ function registerArchivalHandlers() {
 }
 function registerIpcHandlers(deps = {}) {
   const logger2 = new Logger("RendererError");
-  const logFile = join(app.getPath("userData"), "renderer-errors.log");
-  ipcMain.handle("app/ping", () => "pong");
-  ipcMain.handle("app/copy-to-clipboard", (_event, text) => {
+  const logFile = require$$0.join(require$$1.app.getPath("userData"), "renderer-errors.log");
+  require$$1.ipcMain.handle("app/ping", () => "pong");
+  require$$1.ipcMain.handle("app/copy-to-clipboard", (_event, text) => {
     try {
-      clipboard.writeText(text ?? "");
+      require$$1.clipboard.writeText(text ?? "");
       return { ok: true };
     } catch (error2) {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to copy to clipboard." };
     }
   });
-  ipcMain.handle("app/reveal-path", (_event, filePath) => {
+  require$$1.ipcMain.handle("app/reveal-path", (_event, filePath) => {
     if (!filePath) {
       return { ok: false, error: "missing_path" };
     }
     try {
-      shell.showItemInFolder(filePath);
+      require$$1.shell.showItemInFolder(filePath);
       return { ok: true };
     } catch (error2) {
       return { ok: false, error: error2 instanceof Error ? error2.message : "Unable to reveal path." };
     }
   });
-  ipcMain.handle("app/log-client-error", async (_event, payload) => {
+  require$$1.ipcMain.handle("app/log-client-error", async (_event, payload) => {
     const message = payload?.message?.trim();
     if (!message) {
       return { ok: false, error: "missing_message" };
@@ -9235,7 +9648,7 @@ function registerIpcHandlers(deps = {}) {
     };
     logger2.error(entry.message, { source: entry.source, level: entry.level });
     try {
-      await appendFile(logFile, `${JSON.stringify(entry)}
+      await promises.appendFile(logFile, `${JSON.stringify(entry)}
 `, "utf-8");
     } catch {
     }
@@ -9261,11 +9674,11 @@ class YtDlpService {
     this.logger = new Logger("YtDlpService");
   }
   async download(request) {
-    const outputTemplate = request.outputPath ?? join(getDownloadPath(), "%(title)s.%(ext)s");
+    const outputTemplate = request.outputPath ?? require$$0.join(getDownloadPath(), "%(title)s.%(ext)s");
     const binaryPath = resolveBundledBinary("yt-dlp");
     let outputPath = null;
     try {
-      accessSync(binaryPath, constants$3.X_OK);
+      node_fs.accessSync(binaryPath, node_fs.constants.X_OK);
     } catch (error2) {
       throw new Error(`yt-dlp not executable at ${binaryPath}`);
     }
@@ -9296,7 +9709,7 @@ class YtDlpService {
         }
       }
       args.push(request.url);
-      const child = spawn(binaryPath, args, { stdio: "pipe" });
+      const child = require$$0$1.spawn(binaryPath, args, { stdio: "pipe" });
       let stderr = "";
       let stdoutBuffer = "";
       let stderrBuffer = "";
@@ -9387,7 +9800,7 @@ class YtDlpService {
     });
     return {
       outputPath,
-      fileName: outputPath ? basename(outputPath) : null
+      fileName: outputPath ? require$$0.basename(outputPath) : null
     };
   }
   extractDestination(line) {
@@ -9409,7 +9822,7 @@ class TaxonomyService {
     this.taxonomyPath = taxonomyPath;
   }
   async load() {
-    const content = await readFile$1(this.taxonomyPath, "utf-8");
+    const content = await promises.readFile(this.taxonomyPath, "utf-8");
     this.config = this.parse(content);
     return this.config;
   }
@@ -9545,7 +9958,7 @@ class TaxonomyService {
   // Watch for file changes and reload
   async watchForChanges(onChange) {
     try {
-      const watcher = watch(this.taxonomyPath);
+      const watcher = promises.watch(this.taxonomyPath);
       for await (const event of watcher) {
         if (event.eventType === "change") {
           try {
@@ -9583,7 +9996,7 @@ class EmbeddingService {
     this.initialized = false;
     this.db = db2;
     this.config = {
-      modelPath: join(app.getPath("userData"), "models", "clip-vit-base-patch32.onnx"),
+      modelPath: require$$0.join(require$$1.app.getPath("userData"), "models", "clip-vit-base-patch32.onnx"),
       modelName: "clip-vit-base-patch32",
       dimensions: 512,
       batchSize: 8,
@@ -9592,14 +10005,14 @@ class EmbeddingService {
   }
   async initialize() {
     if (this.initialized) return;
-    if (!existsSync(this.config.modelPath)) {
+    if (!node_fs.existsSync(this.config.modelPath)) {
       console.warn(
         `CLIP model not found at ${this.config.modelPath}. Embedding features will be disabled until model is installed.`
       );
       return;
     }
     try {
-      const ort = await import("./index-B05m6qzr.js").then((n) => n.i);
+      const ort = await Promise.resolve().then(() => require("./index-DFybGk0c.cjs")).then((n) => n.index);
       this.session = await ort.InferenceSession.create(this.config.modelPath);
       this.initialized = true;
       console.log("CLIP embedding model loaded successfully");
@@ -9622,7 +10035,7 @@ class EmbeddingService {
       throw new Error("Embedding model not initialized");
     }
     const tensor = await this.preprocessImage(imagePath);
-    await import("./index-B05m6qzr.js").then((n) => n.i);
+    await Promise.resolve().then(() => require("./index-DFybGk0c.cjs")).then((n) => n.index);
     const session = this.session;
     const results = await session.run({ input: tensor });
     const outputKey = Object.keys(results)[0];
@@ -9647,7 +10060,7 @@ class EmbeddingService {
     return embeddings;
   }
   async preprocessImage(imagePath) {
-    const sharp = (await import("./index-DI8ir1MY.js").then((n) => n.i)).default;
+    const sharp = (await Promise.resolve().then(() => require("./index-Dng7T4Yr.cjs")).then((n) => n.index)).default;
     const imageBuffer = await sharp(imagePath).resize(224, 224, { fit: "cover" }).removeAlpha().raw().toBuffer();
     const floatData = new Float32Array(3 * 224 * 224);
     const mean = [0.48145466, 0.4578275, 0.40821073];
@@ -9657,7 +10070,7 @@ class EmbeddingService {
       floatData[224 * 224 + i] = (imageBuffer[i * 3 + 1] / 255 - mean[1]) / std[1];
       floatData[2 * 224 * 224 + i] = (imageBuffer[i * 3 + 2] / 255 - mean[2]) / std[2];
     }
-    const ort = await import("./index-B05m6qzr.js").then((n) => n.i);
+    const ort = await Promise.resolve().then(() => require("./index-DFybGk0c.cjs")).then((n) => n.index);
     return new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
   }
   computeAggregatedEmbedding(frameEmbeddings) {
@@ -10390,7 +10803,7 @@ class SmartTaggingService {
       embeddingModel: "clip-vit-base-patch32",
       autoSuggestOnImport: false,
       autoIndexOnImport: true,
-      taxonomyPath: join(app.getPath("userData"), "tags.txt")
+      taxonomyPath: require$$0.join(require$$1.app.getPath("userData"), "tags.txt")
     };
     this.config = { ...defaultConfig, ...config };
     this.taxonomyService = new TaxonomyService(this.config.taxonomyPath);
@@ -10800,11 +11213,11 @@ class WatchFolderService {
       return;
     }
     try {
-      this.watcher = watch$1(this.config.path, (_event, filename) => {
+      this.watcher = node_fs.watch(this.config.path, (_event, filename) => {
         if (!filename) {
           return;
         }
-        const fullPath = join(this.config.path ?? "", filename.toString());
+        const fullPath = require$$0.join(this.config.path ?? "", filename.toString());
         this.queueProcess(fullPath);
       });
       this.logger.info("watch folder started", { path: this.config.path });
@@ -10843,22 +11256,22 @@ class WatchFolderService {
       return;
     }
     try {
-      const entries = await readdir(this.config.path);
+      const entries = await promises.readdir(this.config.path);
       for (const entry of entries) {
-        this.queueProcess(join(this.config.path, entry));
+        this.queueProcess(require$$0.join(this.config.path, entry));
       }
     } catch (error2) {
       this.logger.warn("failed to scan watch folder", { error: error2 });
     }
   }
   async processFile(filePath) {
-    const ext = extname(filePath).toLowerCase();
+    const ext = require$$0.extname(filePath).toLowerCase();
     if (!DEFAULT_EXTENSIONS.has(ext)) {
       return;
     }
     let info;
     try {
-      info = await stat$5(filePath);
+      info = await promises.stat(filePath);
     } catch {
       return;
     }
@@ -10871,7 +11284,7 @@ class WatchFolderService {
     }
     let content = "";
     try {
-      content = await readFile$1(filePath, "utf-8");
+      content = await promises.readFile(filePath, "utf-8");
     } catch (error2) {
       this.logger.warn("failed to read watch file", { error: error2 });
       return;
@@ -10926,8 +11339,8 @@ class WatchFolderService {
     return value === "1" || value.toLowerCase() === "true";
   }
   enqueueDownload(url) {
-    const downloadId = randomUUID();
-    const jobId = randomUUID();
+    const downloadId = require$$1$1.randomUUID();
+    const jobId = require$$1$1.randomUUID();
     const createdAt = (/* @__PURE__ */ new Date()).toISOString();
     const outputDir = getSetting(this.db, "download_path") ?? getDownloadPath();
     this.db.prepare(
@@ -10944,16 +11357,16 @@ class WatchFolderService {
     });
   }
   statePath() {
-    return join(getAppDataPath(), STATE_FILE);
+    return require$$0.join(getAppDataPath(), STATE_FILE);
   }
   async loadState() {
     const path2 = this.statePath();
-    if (!existsSync(path2)) {
+    if (!node_fs.existsSync(path2)) {
       this.fileState.clear();
       return;
     }
     try {
-      const content = await readFile$1(path2, "utf-8");
+      const content = await promises.readFile(path2, "utf-8");
       const parsed = JSON.parse(content);
       this.fileState = new Map(Object.entries(parsed.files ?? {}).map(([key, value]) => [key, Number(value) || 0]));
     } catch {
@@ -10963,8 +11376,8 @@ class WatchFolderService {
   async saveState() {
     const path2 = this.statePath();
     const payload = { files: Object.fromEntries(this.fileState.entries()) };
-    await mkdir$4(getAppDataPath(), { recursive: true });
-    await writeFile$1(path2, JSON.stringify(payload, null, 2), "utf-8");
+    await promises.mkdir(getAppDataPath(), { recursive: true });
+    await promises.writeFile(path2, JSON.stringify(payload, null, 2), "utf-8");
   }
 }
 var commonjsGlobal = typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : {};
@@ -10995,7 +11408,7 @@ universalify$1.fromPromise = function(fn) {
     }
   }, "name", { value: fn.name });
 };
-var constants$2 = require$$0;
+var constants$2 = require$$0$3;
 var origCwd = process.cwd;
 var cwd = null;
 var platform = process.env.GRACEFUL_FS_PLATFORM || process.platform;
@@ -11276,7 +11689,7 @@ function patch$3(fs2) {
     return false;
   }
 }
-var Stream = require$$0$1.Stream;
+var Stream = require$$0$4.Stream;
 var legacyStreams = legacy$1;
 function legacy$1(fs2) {
   return {
@@ -11382,7 +11795,7 @@ function clone$1(obj) {
   });
   return copy2;
 }
-var fs$h = require$$1;
+var fs$h = require$$1$2;
 var polyfills = polyfills$1;
 var legacy = legacyStreams;
 var clone = clone_1;
@@ -11461,7 +11874,7 @@ function patch$2(fs2) {
   polyfills(fs2);
   fs2.gracefulify = patch$2;
   fs2.createReadStream = createReadStream;
-  fs2.createWriteStream = createWriteStream2;
+  fs2.createWriteStream = createWriteStream;
   var fs$readFile = fs2.readFile;
   fs2.readFile = readFile2;
   function readFile2(path2, options, cb) {
@@ -11498,8 +11911,8 @@ function patch$2(fs2) {
   }
   var fs$appendFile = fs2.appendFile;
   if (fs$appendFile)
-    fs2.appendFile = appendFile2;
-  function appendFile2(path2, data, options, cb) {
+    fs2.appendFile = appendFile;
+  function appendFile(path2, data, options, cb) {
     if (typeof options === "function")
       cb = options, options = null;
     return go$appendFile(path2, data, options, cb);
@@ -11535,9 +11948,9 @@ function patch$2(fs2) {
     }
   }
   var fs$readdir = fs2.readdir;
-  fs2.readdir = readdir2;
+  fs2.readdir = readdir;
   var noReaddirOptionVersions = /^v[0-5]\./;
-  function readdir2(path2, options, cb) {
+  function readdir(path2, options, cb) {
     if (typeof options === "function")
       cb = options, options = null;
     var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path22, options2, cb2, startTime) {
@@ -11640,7 +12053,7 @@ function patch$2(fs2) {
   }
   function ReadStream$open() {
     var that = this;
-    open2(that.path, that.flags, that.mode, function(err, fd) {
+    open(that.path, that.flags, that.mode, function(err, fd) {
       if (err) {
         if (that.autoClose)
           that.destroy();
@@ -11660,7 +12073,7 @@ function patch$2(fs2) {
   }
   function WriteStream$open() {
     var that = this;
-    open2(that.path, that.flags, that.mode, function(err, fd) {
+    open(that.path, that.flags, that.mode, function(err, fd) {
       if (err) {
         that.destroy();
         that.emit("error", err);
@@ -11673,12 +12086,12 @@ function patch$2(fs2) {
   function createReadStream(path2, options) {
     return new fs2.ReadStream(path2, options);
   }
-  function createWriteStream2(path2, options) {
+  function createWriteStream(path2, options) {
     return new fs2.WriteStream(path2, options);
   }
   var fs$open = fs2.open;
-  fs2.open = open2;
-  function open2(path2, flags, mode, cb) {
+  fs2.open = open;
+  function open(path2, flags, mode, cb) {
     if (typeof mode === "function")
       cb = mode, mode = null;
     return go$open(path2, flags, mode, cb);
@@ -11845,7 +12258,7 @@ function retry$2() {
 })(fs$i);
 var makeDir$1 = {};
 var utils$1 = {};
-const path$l = require$$1$1;
+const path$l = require$$1$3;
 utils$1.checkPath = function checkPath(pth) {
   if (process.platform === "win32") {
     const pathHasInvalidWinCharacters = /[<>:"|?*]/.test(pth.replace(path$l.parse(pth).root, ""));
@@ -11919,7 +12332,7 @@ var utimes = {
   utimesMillisSync: utimesMillisSync$1
 };
 const fs$d = fs$i;
-const path$k = require$$1$1;
+const path$k = require$$1$3;
 const util$1 = require$$4;
 function getStats$2(src2, dest, opts) {
   const statFunc = opts.dereference ? (file2) => fs$d.stat(file2, { bigint: true }) : (file2) => fs$d.lstat(file2, { bigint: true });
@@ -12043,7 +12456,7 @@ var stat$4 = {
   areIdentical: areIdentical$2
 };
 const fs$c = gracefulFs;
-const path$j = require$$1$1;
+const path$j = require$$1$3;
 const mkdirs$1 = mkdirs$2.mkdirs;
 const pathExists$5 = pathExists_1.pathExists;
 const utimesMillis = utimes.utimesMillis;
@@ -12233,7 +12646,7 @@ function copyLink$1(resolvedSrc, dest, cb) {
 }
 var copy_1 = copy$2;
 const fs$b = gracefulFs;
-const path$i = require$$1$1;
+const path$i = require$$1$3;
 const mkdirsSync$1 = mkdirs$2.mkdirsSync;
 const utimesMillisSync = utimes.utimesMillisSync;
 const stat$2 = stat$4;
@@ -12266,8 +12679,8 @@ function startCopy(destStat, src2, dest, opts) {
   return getStats(destStat, src2, dest, opts);
 }
 function getStats(destStat, src2, dest, opts) {
-  const statSync2 = opts.dereference ? fs$b.statSync : fs$b.lstatSync;
-  const srcStat = statSync2(src2);
+  const statSync = opts.dereference ? fs$b.statSync : fs$b.lstatSync;
+  const srcStat = statSync(src2);
   if (srcStat.isDirectory()) return onDir(srcStat, destStat, src2, dest, opts);
   else if (srcStat.isFile() || srcStat.isCharacterDevice() || srcStat.isBlockDevice()) return onFile(srcStat, destStat, src2, dest, opts);
   else if (srcStat.isSymbolicLink()) return onLink(destStat, src2, dest, opts);
@@ -12365,7 +12778,7 @@ var copy$1 = {
   copySync: copySync_1
 };
 const fs$a = gracefulFs;
-const path$h = require$$1$1;
+const path$h = require$$1$3;
 const assert = require$$5;
 const isWindows = process.platform === "win32";
 function defaults(options) {
@@ -12609,7 +13022,7 @@ var remove_1 = {
 };
 const u$6 = universalify$1.fromPromise;
 const fs$8 = fs$i;
-const path$g = require$$1$1;
+const path$g = require$$1$3;
 const mkdir$3 = mkdirs$2;
 const remove$1 = remove_1;
 const emptyDir = u$6(async function emptyDir2(dir) {
@@ -12640,7 +13053,7 @@ var empty = {
   emptydir: emptyDir
 };
 const u$5 = universalify$1.fromCallback;
-const path$f = require$$1$1;
+const path$f = require$$1$3;
 const fs$7 = gracefulFs;
 const mkdir$2 = mkdirs$2;
 function createFile$1(file2, callback) {
@@ -12695,7 +13108,7 @@ var file = {
   createFileSync: createFileSync$1
 };
 const u$4 = universalify$1.fromCallback;
-const path$e = require$$1$1;
+const path$e = require$$1$3;
 const fs$6 = gracefulFs;
 const mkdir$1 = mkdirs$2;
 const pathExists$4 = pathExists_1.pathExists;
@@ -12749,7 +13162,7 @@ var link = {
   createLink: u$4(createLink$1),
   createLinkSync: createLinkSync$1
 };
-const path$d = require$$1$1;
+const path$d = require$$1$3;
 const fs$5 = gracefulFs;
 const pathExists$3 = pathExists_1.pathExists;
 function symlinkPaths$1(srcpath, dstpath, callback) {
@@ -12847,7 +13260,7 @@ var symlinkType_1 = {
   symlinkTypeSync: symlinkTypeSync$1
 };
 const u$3 = universalify$1.fromCallback;
-const path$c = require$$1$1;
+const path$c = require$$1$3;
 const fs$3 = fs$i;
 const _mkdirs = mkdirs$2;
 const mkdirs = _mkdirs.mkdirs;
@@ -12876,10 +13289,10 @@ function createSymlink$1(srcpath, dstpath, type2, callback) {
   });
 }
 function _createSymlink(srcpath, dstpath, type2, callback) {
-  symlinkPaths(srcpath, dstpath, (err, relative2) => {
+  symlinkPaths(srcpath, dstpath, (err, relative) => {
     if (err) return callback(err);
-    srcpath = relative2.toDst;
-    symlinkType(relative2.toCwd, type2, (err2, type3) => {
+    srcpath = relative.toDst;
+    symlinkType(relative.toCwd, type2, (err2, type3) => {
       if (err2) return callback(err2);
       const dir = path$c.dirname(dstpath);
       pathExists$2(dir, (err3, dirExists) => {
@@ -12904,9 +13317,9 @@ function createSymlinkSync$1(srcpath, dstpath, type2) {
     const dstStat = fs$3.statSync(dstpath);
     if (areIdentical(srcStat, dstStat)) return;
   }
-  const relative2 = symlinkPathsSync(srcpath, dstpath);
-  srcpath = relative2.toDst;
-  type2 = symlinkTypeSync(relative2.toCwd, type2);
+  const relative = symlinkPathsSync(srcpath, dstpath);
+  srcpath = relative.toDst;
+  type2 = symlinkTypeSync(relative.toCwd, type2);
   const dir = path$c.dirname(dstpath);
   const exists = fs$3.existsSync(dir);
   if (exists) return fs$3.symlinkSync(srcpath, dstpath, type2);
@@ -12951,7 +13364,7 @@ let _fs;
 try {
   _fs = gracefulFs;
 } catch (_) {
-  _fs = require$$1;
+  _fs = require$$1$2;
 }
 const universalify = universalify$1;
 const { stringify: stringify$3, stripBom } = utils;
@@ -13023,7 +13436,7 @@ var jsonfile = {
 };
 const u$2 = universalify$1.fromCallback;
 const fs$2 = gracefulFs;
-const path$b = require$$1$1;
+const path$b = require$$1$3;
 const mkdir = mkdirs$2;
 const pathExists$1 = pathExists_1.pathExists;
 function outputFile$1(file2, data, encoding, callback) {
@@ -13079,7 +13492,7 @@ jsonFile.readJSON = jsonFile.readJson;
 jsonFile.readJSONSync = jsonFile.readJsonSync;
 var json$1 = jsonFile;
 const fs$1 = gracefulFs;
-const path$a = require$$1$1;
+const path$a = require$$1$3;
 const copy = copy$1.copy;
 const remove = remove_1.remove;
 const mkdirp = mkdirs$2.mkdirp;
@@ -13143,7 +13556,7 @@ function moveAcrossDevice$1(src2, dest, overwrite, cb) {
 }
 var move_1 = move$1;
 const fs = gracefulFs;
-const path$9 = require$$1$1;
+const path$9 = require$$1$3;
 const copySync = copy$1.copySync;
 const removeSync = remove_1.removeSync;
 const mkdirpSync = mkdirs$2.mkdirpSync;
@@ -13212,7 +13625,7 @@ var out = {};
 var CancellationToken$1 = {};
 Object.defineProperty(CancellationToken$1, "__esModule", { value: true });
 CancellationToken$1.CancellationError = CancellationToken$1.CancellationToken = void 0;
-const events_1$1 = require$$0$2;
+const events_1$1 = require$$0$5;
 class CancellationToken extends events_1$1.EventEmitter {
   get cancelled() {
     return this._cancelled || this._parent != null && this._parent.cancelled;
@@ -13619,7 +14032,7 @@ var hasRequiredBrowser;
 function requireBrowser() {
   if (hasRequiredBrowser) return browser.exports;
   hasRequiredBrowser = 1;
-  (function(module, exports$1) {
+  (function(module2, exports$1) {
     exports$1.formatArgs = formatArgs;
     exports$1.save = save;
     exports$1.load = load2;
@@ -13727,7 +14140,7 @@ function requireBrowser() {
       typeof navigator !== "undefined" && navigator.userAgent && navigator.userAgent.toLowerCase().match(/applewebkit\/(\d+)/);
     }
     function formatArgs(args) {
-      args[0] = (this.useColors ? "%c" : "") + this.namespace + (this.useColors ? " %c" : " ") + args[0] + (this.useColors ? "%c " : " ") + "+" + module.exports.humanize(this.diff);
+      args[0] = (this.useColors ? "%c" : "") + this.namespace + (this.useColors ? " %c" : " ") + args[0] + (this.useColors ? "%c " : " ") + "+" + module2.exports.humanize(this.diff);
       if (!this.useColors) {
         return;
       }
@@ -13775,8 +14188,8 @@ function requireBrowser() {
       } catch (error2) {
       }
     }
-    module.exports = requireCommon()(exports$1);
-    const { formatters } = module.exports;
+    module2.exports = requireCommon()(exports$1);
+    const { formatters } = module2.exports;
     formatters.j = function(v) {
       try {
         return JSON.stringify(v);
@@ -13807,7 +14220,7 @@ function requireSupportsColor() {
   if (hasRequiredSupportsColor) return supportsColor_1;
   hasRequiredSupportsColor = 1;
   const os2 = require$$2;
-  const tty = require$$1$2;
+  const tty = require$$1$4;
   const hasFlag2 = requireHasFlag();
   const { env } = process;
   let forceColor;
@@ -13907,8 +14320,8 @@ var hasRequiredNode;
 function requireNode() {
   if (hasRequiredNode) return node.exports;
   hasRequiredNode = 1;
-  (function(module, exports$1) {
-    const tty = require$$1$2;
+  (function(module2, exports$1) {
+    const tty = require$$1$4;
     const util2 = require$$4;
     exports$1.init = init;
     exports$1.log = log;
@@ -14035,7 +14448,7 @@ function requireNode() {
         const colorCode = "\x1B[3" + (c < 8 ? c : "8;5;" + c);
         const prefix = `  ${colorCode};1m${name} \x1B[0m`;
         args[0] = prefix + args[0].split("\n").join("\n" + prefix);
-        args.push(colorCode + "m+" + module.exports.humanize(this.diff) + "\x1B[0m");
+        args.push(colorCode + "m+" + module2.exports.humanize(this.diff) + "\x1B[0m");
       } else {
         args[0] = getDate() + name + " " + args[0];
       }
@@ -14066,8 +14479,8 @@ function requireNode() {
         debug2.inspectOpts[keys[i]] = exports$1.inspectOpts[keys[i]];
       }
     }
-    module.exports = requireCommon()(exports$1);
-    const { formatters } = module.exports;
+    module2.exports = requireCommon()(exports$1);
+    const { formatters } = module2.exports;
     formatters.o = function(v) {
       this.inspectOpts.colors = this.useColors;
       return util2.inspect(v, this.inspectOpts).split("\n").map((str2) => str2.trim()).join(" ");
@@ -14088,7 +14501,7 @@ var srcExports = src.exports;
 var ProgressCallbackTransform$1 = {};
 Object.defineProperty(ProgressCallbackTransform$1, "__esModule", { value: true });
 ProgressCallbackTransform$1.ProgressCallbackTransform = void 0;
-const stream_1$3 = require$$0$1;
+const stream_1$3 = require$$0$4;
 class ProgressCallbackTransform extends stream_1$3.Transform {
   constructor(total, cancellationToken, onProgress) {
     super();
@@ -14147,10 +14560,10 @@ httpExecutor.configureRequestUrl = configureRequestUrl;
 httpExecutor.safeGetHeader = safeGetHeader;
 httpExecutor.configureRequestOptions = configureRequestOptions;
 httpExecutor.safeStringifyJson = safeStringifyJson;
-const crypto_1$4 = require$$0$3;
+const crypto_1$4 = require$$0$6;
 const debug_1$1 = srcExports;
-const fs_1$5 = require$$1;
-const stream_1$2 = require$$0$1;
+const fs_1$5 = require$$1$2;
+const stream_1$2 = require$$0$4;
 const url_1$5 = require$$4$1;
 const CancellationToken_1$1 = CancellationToken$1;
 const error_1$2 = error;
@@ -14719,7 +15132,7 @@ function parseDn(seq2) {
 var uuid = {};
 Object.defineProperty(uuid, "__esModule", { value: true });
 uuid.nil = uuid.UUID = void 0;
-const crypto_1$3 = require$$0$3;
+const crypto_1$3 = require$$0$6;
 const error_1$1 = error;
 const invalidName = "options.name must be either a string or a Buffer";
 const randomHost = (0, crypto_1$3.randomBytes)(16);
@@ -15015,7 +15428,7 @@ var sax$1 = {};
     };
     var Stream2;
     try {
-      Stream2 = require2("stream").Stream;
+      Stream2 = require("stream").Stream;
     } catch (ex) {
       Stream2 = function() {
       };
@@ -15071,7 +15484,7 @@ var sax$1 = {};
     SAXStream.prototype.write = function(data) {
       if (typeof Buffer === "function" && typeof Buffer.isBuffer === "function" && Buffer.isBuffer(data)) {
         if (!this._decoder) {
-          var SD = require$$1$3.StringDecoder;
+          var SD = require$$1$5.StringDecoder;
           this._decoder = new SD("utf8");
         }
         data = this._decoder.write(data);
@@ -19213,14 +19626,14 @@ var constants$1 = {
 const debug$1 = typeof process === "object" && process.env && process.env.NODE_DEBUG && /\bsemver\b/i.test(process.env.NODE_DEBUG) ? (...args) => console.error("SEMVER", ...args) : () => {
 };
 var debug_1 = debug$1;
-(function(module, exports$1) {
+(function(module2, exports$1) {
   const {
     MAX_SAFE_COMPONENT_LENGTH: MAX_SAFE_COMPONENT_LENGTH2,
     MAX_SAFE_BUILD_LENGTH: MAX_SAFE_BUILD_LENGTH2,
     MAX_LENGTH: MAX_LENGTH2
   } = constants$1;
   const debug2 = debug_1;
-  exports$1 = module.exports = {};
+  exports$1 = module2.exports = {};
   const re2 = exports$1.re = [];
   const safeRe = exports$1.safeRe = [];
   const src2 = exports$1.src = [];
@@ -20814,7 +21227,7 @@ var semver$1 = {
 var DownloadedUpdateHelper$1 = {};
 var lodash_isequal = { exports: {} };
 lodash_isequal.exports;
-(function(module, exports$1) {
+(function(module2, exports$1) {
   var LARGE_ARRAY_SIZE = 200;
   var HASH_UNDEFINED = "__lodash_hash_undefined__";
   var COMPARE_PARTIAL_FLAG = 1, COMPARE_UNORDERED_FLAG = 2;
@@ -20831,7 +21244,7 @@ lodash_isequal.exports;
   var freeSelf2 = typeof self == "object" && self && self.Object === Object && self;
   var root2 = freeGlobal2 || freeSelf2 || Function("return this")();
   var freeExports = exports$1 && !exports$1.nodeType && exports$1;
-  var freeModule = freeExports && true && module && !module.nodeType && module;
+  var freeModule = freeExports && true && module2 && !module2.nodeType && module2;
   var moduleExports = freeModule && freeModule.exports === freeExports;
   var freeProcess = moduleExports && freeGlobal2.process;
   var nodeUtil = function() {
@@ -21460,17 +21873,17 @@ lodash_isequal.exports;
   function stubFalse() {
     return false;
   }
-  module.exports = isEqual2;
+  module2.exports = isEqual2;
 })(lodash_isequal, lodash_isequal.exports);
 var lodash_isequalExports = lodash_isequal.exports;
 Object.defineProperty(DownloadedUpdateHelper$1, "__esModule", { value: true });
 DownloadedUpdateHelper$1.DownloadedUpdateHelper = void 0;
 DownloadedUpdateHelper$1.createTempUpdateFile = createTempUpdateFile;
-const crypto_1$2 = require$$0$3;
-const fs_1$4 = require$$1;
+const crypto_1$2 = require$$0$6;
+const fs_1$4 = require$$1$2;
 const isEqual = lodash_isequalExports;
 const fs_extra_1$6 = lib;
-const path$8 = require$$1$1;
+const path$8 = require$$1$3;
 class DownloadedUpdateHelper {
   constructor(cacheDir) {
     this.cacheDir = cacheDir;
@@ -21623,7 +22036,7 @@ var ElectronAppAdapter$1 = {};
 var AppAdapter = {};
 Object.defineProperty(AppAdapter, "__esModule", { value: true });
 AppAdapter.getAppCacheDir = getAppCacheDir;
-const path$7 = require$$1$1;
+const path$7 = require$$1$3;
 const os_1$1 = require$$2;
 function getAppCacheDir() {
   const homedir = (0, os_1$1.homedir)();
@@ -21639,11 +22052,11 @@ function getAppCacheDir() {
 }
 Object.defineProperty(ElectronAppAdapter$1, "__esModule", { value: true });
 ElectronAppAdapter$1.ElectronAppAdapter = void 0;
-const path$6 = require$$1$1;
+const path$6 = require$$1$3;
 const AppAdapter_1 = AppAdapter;
 class ElectronAppAdapter {
-  constructor(app2 = require$$1$4.app) {
-    this.app = app2;
+  constructor(app = require$$1.app) {
+    this.app = app;
   }
   whenReady() {
     return this.app.whenReady();
@@ -21685,7 +22098,7 @@ var electronHttpExecutor = {};
   const builder_util_runtime_12 = out;
   exports$1.NET_SESSION_NAME = "electron-updater";
   function getNetSession() {
-    return require$$1$4.session.fromPartition(exports$1.NET_SESSION_NAME, {
+    return require$$1.session.fromPartition(exports$1.NET_SESSION_NAME, {
       cache: false
     });
   }
@@ -21726,7 +22139,7 @@ var electronHttpExecutor = {};
       if (this.cachedSession == null) {
         this.cachedSession = getNetSession();
       }
-      const request = require$$1$4.net.request({
+      const request = require$$1.net.request({
         ...options,
         session: this.cachedSession
       });
@@ -21837,8 +22250,8 @@ class Provider {
   }
   getChannelFilePrefix() {
     if (this.runtimeOptions.platform === "linux") {
-      const arch2 = process.env["TEST_UPDATER_ARCH"] || process.arch;
-      const archSuffix = arch2 === "x64" ? "" : `-${arch2}`;
+      const arch = process.env["TEST_UPDATER_ARCH"] || process.arch;
+      const archSuffix = arch === "x64" ? "" : `-${arch}`;
       return "-linux" + archSuffix;
     } else {
       return this.runtimeOptions.platform === "darwin" ? "-mac" : "";
@@ -22252,7 +22665,7 @@ Object.defineProperty(PrivateGitHubProvider$1, "__esModule", { value: true });
 PrivateGitHubProvider$1.PrivateGitHubProvider = void 0;
 const builder_util_runtime_1$9 = out;
 const js_yaml_1$1 = jsYaml;
-const path$5 = require$$1$1;
+const path$5 = require$$1$3;
 const url_1$2 = require$$4$1;
 const util_1$1 = util;
 const GitHubProvider_1$1 = GitHubProvider$1;
@@ -22505,8 +22918,8 @@ Object.defineProperty(DataSplitter$1, "__esModule", { value: true });
 DataSplitter$1.DataSplitter = void 0;
 DataSplitter$1.copyData = copyData;
 const builder_util_runtime_1$7 = out;
-const fs_1$3 = require$$1;
-const stream_1$1 = require$$0$1;
+const fs_1$3 = require$$1$2;
+const stream_1$1 = require$$0$4;
 const downloadPlanBuilder_1$2 = downloadPlanBuilder;
 const DOUBLE_CRLF = Buffer.from("\r\n\r\n");
 var ReadState;
@@ -22802,7 +23215,7 @@ function checkIsRangesSupported(response, reject) {
 var ProgressDifferentialDownloadCallbackTransform$1 = {};
 Object.defineProperty(ProgressDifferentialDownloadCallbackTransform$1, "__esModule", { value: true });
 ProgressDifferentialDownloadCallbackTransform$1.ProgressDifferentialDownloadCallbackTransform = void 0;
-const stream_1 = require$$0$1;
+const stream_1 = require$$0$4;
 var OperationKind;
 (function(OperationKind2) {
   OperationKind2[OperationKind2["COPY"] = 0] = "COPY";
@@ -22888,7 +23301,7 @@ Object.defineProperty(DifferentialDownloader$1, "__esModule", { value: true });
 DifferentialDownloader$1.DifferentialDownloader = void 0;
 const builder_util_runtime_1$5 = out;
 const fs_extra_1$5 = lib;
-const fs_1$2 = require$$1;
+const fs_1$2 = require$$1$2;
 const DataSplitter_1 = DataSplitter$1;
 const url_1$1 = require$$4$1;
 const downloadPlanBuilder_1 = downloadPlanBuilder;
@@ -23175,13 +23588,13 @@ var types = {};
 Object.defineProperty(AppUpdater$1, "__esModule", { value: true });
 AppUpdater$1.NoOpLogger = AppUpdater$1.AppUpdater = void 0;
 const builder_util_runtime_1$4 = out;
-const crypto_1$1 = require$$0$3;
+const crypto_1$1 = require$$0$6;
 const os_1 = require$$2;
-const events_1 = require$$0$2;
+const events_1 = require$$0$5;
 const fs_extra_1$4 = lib;
 const js_yaml_1 = jsYaml;
 const lazy_val_1 = main;
-const path$4 = require$$1$1;
+const path$4 = require$$1$3;
 const semver_1 = semver$1;
 const DownloadedUpdateHelper_1 = DownloadedUpdateHelper$1;
 const ElectronAppAdapter_1 = ElectronAppAdapter$1;
@@ -23259,7 +23672,7 @@ class AppUpdater extends events_1.EventEmitter {
       this._isUpdateSupported = value;
     }
   }
-  constructor(options, app2) {
+  constructor(options, app) {
     super();
     this.autoDownload = true;
     this.autoInstallOnAppQuit = true;
@@ -23287,11 +23700,11 @@ class AppUpdater extends events_1.EventEmitter {
     this.on("error", (error2) => {
       this._logger.error(`Error: ${error2.stack || error2.message}`);
     });
-    if (app2 == null) {
+    if (app == null) {
       this.app = new ElectronAppAdapter_1.ElectronAppAdapter();
       this.httpExecutor = new electronHttpExecutor_1.ElectronHttpExecutor((authInfo, callback) => this.emit("login", authInfo, callback));
     } else {
-      this.app = app2;
+      this.app = app;
       this.httpExecutor = null;
     }
     const currentVersionString = this.app.version;
@@ -23374,7 +23787,7 @@ class AppUpdater extends events_1.EventEmitter {
       }
       void it.downloadPromise.then(() => {
         const notificationContent = AppUpdater.formatDownloadNotification(it.updateInfo.version, this.app.name, downloadNotification);
-        new require$$1$4.Notification(notificationContent).show();
+        new require$$1.Notification(notificationContent).show();
       });
       return it;
     });
@@ -23745,11 +24158,11 @@ class NoOpLogger {
 AppUpdater$1.NoOpLogger = NoOpLogger;
 Object.defineProperty(BaseUpdater$1, "__esModule", { value: true });
 BaseUpdater$1.BaseUpdater = void 0;
-const child_process_1$3 = require$$1$5;
+const child_process_1$3 = require$$1$6;
 const AppUpdater_1$1 = AppUpdater$1;
 class BaseUpdater extends AppUpdater_1$1.AppUpdater {
-  constructor(options, app2) {
-    super(options, app2);
+  constructor(options, app) {
+    super(options, app);
     this.quitAndInstallCalled = false;
     this.quitHandlerAdded = false;
   }
@@ -23758,7 +24171,7 @@ class BaseUpdater extends AppUpdater_1$1.AppUpdater {
     const isInstalled = this.install(isSilent, isSilent ? isForceRunAfter : this.autoRunAppAfterInstall);
     if (isInstalled) {
       setImmediate(() => {
-        require$$1$4.autoUpdater.emit("before-quit-for-update");
+        require$$1.autoUpdater.emit("before-quit-for-update");
         this.app.quit();
       });
     } else {
@@ -23924,17 +24337,17 @@ async function readEmbeddedBlockMapData(file2) {
 Object.defineProperty(AppImageUpdater$1, "__esModule", { value: true });
 AppImageUpdater$1.AppImageUpdater = void 0;
 const builder_util_runtime_1$3 = out;
-const child_process_1$2 = require$$1$5;
+const child_process_1$2 = require$$1$6;
 const fs_extra_1$2 = lib;
-const fs_1$1 = require$$1;
-const path$3 = require$$1$1;
+const fs_1$1 = require$$1$2;
+const path$3 = require$$1$3;
 const BaseUpdater_1$4 = BaseUpdater$1;
 const FileWithEmbeddedBlockMapDifferentialDownloader_1$1 = FileWithEmbeddedBlockMapDifferentialDownloader$1;
 const Provider_1$5 = Provider$1;
 const types_1$4 = types;
 class AppImageUpdater extends BaseUpdater_1$4.BaseUpdater {
-  constructor(options, app2) {
-    super(options, app2);
+  constructor(options, app) {
+    super(options, app);
   }
   isUpdaterActive() {
     if (process.env["APPIMAGE"] == null) {
@@ -24031,8 +24444,8 @@ const BaseUpdater_1$3 = BaseUpdater$1;
 const Provider_1$4 = Provider$1;
 const types_1$3 = types;
 class DebUpdater extends BaseUpdater_1$3.BaseUpdater {
-  constructor(options, app2) {
-    super(options, app2);
+  constructor(options, app) {
+    super(options, app);
   }
   /*** @private */
   doDownloadUpdate(downloadUpdateOptions) {
@@ -24078,8 +24491,8 @@ const BaseUpdater_1$2 = BaseUpdater$1;
 const types_1$2 = types;
 const Provider_1$3 = Provider$1;
 class PacmanUpdater extends BaseUpdater_1$2.BaseUpdater {
-  constructor(options, app2) {
-    super(options, app2);
+  constructor(options, app) {
+    super(options, app);
   }
   /*** @private */
   doDownloadUpdate(downloadUpdateOptions) {
@@ -24125,8 +24538,8 @@ const BaseUpdater_1$1 = BaseUpdater$1;
 const types_1$1 = types;
 const Provider_1$2 = Provider$1;
 class RpmUpdater extends BaseUpdater_1$1.BaseUpdater {
-  constructor(options, app2) {
-    super(options, app2);
+  constructor(options, app) {
+    super(options, app);
   }
   /*** @private */
   doDownloadUpdate(downloadUpdateOptions) {
@@ -24177,17 +24590,17 @@ Object.defineProperty(MacUpdater$1, "__esModule", { value: true });
 MacUpdater$1.MacUpdater = void 0;
 const builder_util_runtime_1$2 = out;
 const fs_extra_1$1 = lib;
-const fs_1 = require$$1;
-const path$2 = require$$1$1;
+const fs_1 = require$$1$2;
+const path$2 = require$$1$3;
 const http_1 = require$$4$2;
 const AppUpdater_1 = AppUpdater$1;
 const Provider_1$1 = Provider$1;
-const child_process_1$1 = require$$1$5;
-const crypto_1 = require$$0$3;
+const child_process_1$1 = require$$1$6;
+const crypto_1 = require$$0$6;
 class MacUpdater extends AppUpdater_1.AppUpdater {
-  constructor(options, app2) {
-    super(options, app2);
-    this.nativeUpdater = require$$1$4.autoUpdater;
+  constructor(options, app) {
+    super(options, app);
+    this.nativeUpdater = require$$1.autoUpdater;
     this.squirrelDownloadedUpdate = false;
     this.nativeUpdater.on("error", (it) => {
       this._logger.warn(it);
@@ -24412,9 +24825,9 @@ var windowsExecutableCodeSignatureVerifier = {};
 Object.defineProperty(windowsExecutableCodeSignatureVerifier, "__esModule", { value: true });
 windowsExecutableCodeSignatureVerifier.verifySignature = verifySignature;
 const builder_util_runtime_1$1 = out;
-const child_process_1 = require$$1$5;
+const child_process_1 = require$$1$6;
 const os = require$$2;
-const path$1 = require$$1$1;
+const path$1 = require$$1$3;
 function verifySignature(publisherNames, unescapedTempUpdateFile, logger2) {
   return new Promise((resolve, reject) => {
     const tempUpdateFile = unescapedTempUpdateFile.replace(/'/g, "''");
@@ -24514,7 +24927,7 @@ function isOldWin6() {
 Object.defineProperty(NsisUpdater$1, "__esModule", { value: true });
 NsisUpdater$1.NsisUpdater = void 0;
 const builder_util_runtime_1 = out;
-const path = require$$1$1;
+const path = require$$1$3;
 const BaseUpdater_1 = BaseUpdater$1;
 const FileWithEmbeddedBlockMapDifferentialDownloader_1 = FileWithEmbeddedBlockMapDifferentialDownloader$1;
 const types_1 = types;
@@ -24523,8 +24936,8 @@ const fs_extra_1 = lib;
 const windowsExecutableCodeSignatureVerifier_1 = windowsExecutableCodeSignatureVerifier;
 const url_1 = require$$4$1;
 class NsisUpdater extends BaseUpdater_1.BaseUpdater {
-  constructor(options, app2) {
-    super(options, app2);
+  constructor(options, app) {
+    super(options, app);
     this._verifyUpdateCodeSignature = (publisherNames, unescapedTempUpdateFile) => (0, windowsExecutableCodeSignatureVerifier_1.verifySignature)(publisherNames, unescapedTempUpdateFile, this._logger);
   }
   /**
@@ -24636,7 +25049,7 @@ class NsisUpdater extends BaseUpdater_1.BaseUpdater {
       if (errorCode === "UNKNOWN" || errorCode === "EACCES") {
         callUsingElevation();
       } else if (errorCode === "ENOENT") {
-        require$$1$4.shell.openPath(installerPath).catch((err) => this.dispatchError(err));
+        require$$1.shell.openPath(installerPath).catch((err) => this.dispatchError(err));
       } else {
         this.dispatchError(e);
       }
@@ -24689,7 +25102,7 @@ NsisUpdater$1.NsisUpdater = NsisUpdater;
   Object.defineProperty(exports$1, "__esModule", { value: true });
   exports$1.NsisUpdater = exports$1.MacUpdater = exports$1.RpmUpdater = exports$1.PacmanUpdater = exports$1.DebUpdater = exports$1.AppImageUpdater = exports$1.Provider = exports$1.NoOpLogger = exports$1.AppUpdater = exports$1.BaseUpdater = void 0;
   const fs_extra_12 = lib;
-  const path2 = require$$1$1;
+  const path2 = require$$1$3;
   var BaseUpdater_12 = BaseUpdater$1;
   Object.defineProperty(exports$1, "BaseUpdater", { enumerable: true, get: function() {
     return BaseUpdater_12.BaseUpdater;
@@ -24772,7 +25185,7 @@ NsisUpdater$1.NsisUpdater = NsisUpdater;
     }
   });
 })(main$1);
-const __dirname$1 = dirname(fileURLToPath(import.meta.url));
+const __dirname$1 = require$$0.dirname(node_url.fileURLToPath(require("url").pathToFileURL(__filename).href));
 let mainWindow = null;
 let downloadWorker = null;
 let isShuttingDown = false;
@@ -24784,10 +25197,11 @@ let mainLogPath = null;
 const appLogger = new Logger("App");
 const updaterLogger = new Logger("AutoUpdater");
 function createWindow() {
-  const preloadJs = join(__dirname$1, "../preload/index.js");
-  const preloadMjs = join(__dirname$1, "../preload/index.mjs");
-  const preloadPath = existsSync(preloadJs) ? preloadJs : preloadMjs;
-  mainWindow = new BrowserWindow({
+  const preloadCjs = require$$0.join(__dirname$1, "../preload/index.cjs");
+  const preloadJs = require$$0.join(__dirname$1, "../preload/index.js");
+  const preloadMjs = require$$0.join(__dirname$1, "../preload/index.mjs");
+  const preloadPath = node_fs.existsSync(preloadCjs) ? preloadCjs : node_fs.existsSync(preloadJs) ? preloadJs : preloadMjs;
+  mainWindow = new require$$1.BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
@@ -24800,7 +25214,7 @@ function createWindow() {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
-    void mainWindow.loadFile(join(__dirname$1, "../renderer/index.html"));
+    void mainWindow.loadFile(require$$0.join(__dirname$1, "../renderer/index.html"));
   }
   const logWebContents = (event, details) => {
     const entry = {
@@ -24832,7 +25246,7 @@ async function appendMainLog(entry) {
     return;
   }
   try {
-    await appendFile(mainLogPath, `${JSON.stringify(entry)}
+    await promises.appendFile(mainLogPath, `${JSON.stringify(entry)}
 `, "utf-8");
   } catch {
   }
@@ -24869,7 +25283,7 @@ async function ensureBinaries() {
   }
 }
 function initializeAutoUpdater() {
-  if (!app.isPackaged) {
+  if (!require$$1.app.isPackaged) {
     updaterLogger.info("Auto-updater disabled in dev");
     return;
   }
@@ -24901,15 +25315,15 @@ function initializeAutoUpdater() {
   void main$1.autoUpdater.checkForUpdatesAndNotify();
 }
 async function ensureTaxonomyFile() {
-  const userDataPath = app.getPath("userData");
-  const taxonomyPath = join(userDataPath, "tags.txt");
+  const userDataPath = require$$1.app.getPath("userData");
+  const taxonomyPath = require$$0.join(userDataPath, "tags.txt");
   try {
-    await access(taxonomyPath, constants$4.F_OK);
+    await promises.access(taxonomyPath, promises.constants.F_OK);
   } catch {
-    const defaultTaxonomyPath = join(__dirname$1, "../../resources/tags.txt");
+    const defaultTaxonomyPath = require$$0.join(__dirname$1, "../../resources/tags.txt");
     try {
-      await access(defaultTaxonomyPath, constants$4.F_OK);
-      await copyFile$2(defaultTaxonomyPath, taxonomyPath);
+      await promises.access(defaultTaxonomyPath, promises.constants.F_OK);
+      await promises.copyFile(defaultTaxonomyPath, taxonomyPath);
       console.log("Copied default tags.txt to user data");
     } catch {
       const minimalTaxonomy = `# Drapp Tag Taxonomy
@@ -24922,7 +25336,7 @@ favorite
 watch-later
 archived
 `;
-      await writeFile$1(taxonomyPath, minimalTaxonomy);
+      await promises.writeFile(taxonomyPath, minimalTaxonomy);
       console.log("Created minimal tags.txt");
     }
   }
@@ -24975,7 +25389,7 @@ async function initializeServices() {
   transcodeWorker.start();
   transcriptionWorker.start();
 }
-protocol.registerSchemesAsPrivileged([
+require$$1.protocol.registerSchemesAsPrivileged([
   {
     scheme: "media",
     privileges: {
@@ -24987,13 +25401,13 @@ protocol.registerSchemesAsPrivileged([
     }
   }
 ]);
-app.whenReady().then(async () => {
-  protocol.handle("media", (request) => {
+require$$1.app.whenReady().then(async () => {
+  require$$1.protocol.handle("media", (request) => {
     let filePath = decodeURIComponent(request.url.replace("media://", ""));
-    const fileUrl = pathToFileURL(filePath).href;
-    return net.fetch(fileUrl);
+    const fileUrl = node_url.pathToFileURL(filePath).href;
+    return require$$1.net.fetch(fileUrl);
   });
-  mainLogPath = join(app.getPath("userData"), "main-errors.log");
+  mainLogPath = require$$0.join(require$$1.app.getPath("userData"), "main-errors.log");
   process.on("uncaughtException", (error2) => {
     const entry = {
       type: "uncaughtException",
@@ -25018,18 +25432,18 @@ app.whenReady().then(async () => {
   createWindow();
   initializeAutoUpdater();
   void ensureBinaries();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+  require$$1.app.on("activate", () => {
+    if (require$$1.BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
 });
-app.on("window-all-closed", () => {
+require$$1.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
-    app.quit();
+    require$$1.app.quit();
   }
 });
-app.on("before-quit", async (event) => {
+require$$1.app.on("before-quit", async (event) => {
   downloadWorker?.stop();
   transcodeWorker?.stop();
   transcriptionWorker?.stop();
@@ -25045,10 +25459,8 @@ app.on("before-quit", async (event) => {
     } catch (error2) {
       appLogger.error("Failed to save archival state", { error: error2 });
     }
-    app.quit();
+    require$$1.app.quit();
   }
 });
-export {
-  commonjsGlobal as c,
-  getDefaultExportFromCjs as g
-};
+exports.commonjsGlobal = commonjsGlobal;
+exports.getDefaultExportFromCjs = getDefaultExportFromCjs;
