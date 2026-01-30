@@ -7,9 +7,9 @@
   "author": "",
   "license": "MIT",
   "scripts": {
-    "dev": "unset ELECTRON_RUN_AS_NODE && electron-vite dev",
+    "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "preview": "unset ELECTRON_RUN_AS_NODE && electron-vite preview",
+    "preview": "electron-vite preview",
     "dist": "electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },

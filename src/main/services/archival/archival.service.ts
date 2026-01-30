@@ -1036,6 +1036,21 @@ export class ArchivalService {
         }
       }
 
+      // Delete original file if configured
+      if (this.activeJob.config.deleteOriginal) {
+        try {
+          await unlink(item.inputPath)
+          item.originalDeleted = true
+          this.logger.info('Deleted original file', { inputPath: item.inputPath })
+        } catch (deleteError) {
+          // Log warning but don't fail the item if original deletion fails
+          this.logger.warn('Failed to delete original file', {
+            inputPath: item.inputPath,
+            error: deleteError instanceof Error ? deleteError.message : 'Unknown error'
+          })
+        }
+      }
+
       item.status = 'completed'
       item.completedAt = new Date().toISOString()
       item.progress = 100

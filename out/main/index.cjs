@@ -8255,6 +8255,18 @@ class ArchivalService {
           });
         }
       }
+      if (this.activeJob.config.deleteOriginal) {
+        try {
+          await promises.unlink(item.inputPath);
+          item.originalDeleted = true;
+          this.logger.info("Deleted original file", { inputPath: item.inputPath });
+        } catch (deleteError) {
+          this.logger.warn("Failed to delete original file", {
+            inputPath: item.inputPath,
+            error: deleteError instanceof Error ? deleteError.message : "Unknown error"
+          });
+        }
+      }
       item.status = "completed";
       item.completedAt = (/* @__PURE__ */ new Date()).toISOString();
       item.progress = 100;
